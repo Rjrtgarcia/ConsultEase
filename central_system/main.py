@@ -12,10 +12,9 @@ from logging.handlers import RotatingFileHandler
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 # Import configuration system
-from central_system.config import get_config, initialize_config, log_config_load_status
+from central_system.config import get_config, log_config_load_status
 
 # Initialize configuration early
-initialize_config()
 config = get_config()
 log_config_load_status()
 
