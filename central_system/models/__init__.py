@@ -2,7 +2,7 @@ from .faculty import Faculty
 from .student import Student
 from .consultation import Consultation, ConsultationStatus
 from .admin import Admin
-from .base import Base, init_db, get_db
+from .base import Base, init_db, get_db, close_db
 
 __all__ = [
     'Faculty',
@@ -12,5 +12,6 @@ __all__ = [
     'Admin',
     'Base',
     'init_db',
-    'get_db'
+    'get_db',
+    'close_db'
 ] 
