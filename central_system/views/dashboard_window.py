@@ -34,9 +34,14 @@ class FacultyCard(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
 
         # Set fixed width and minimum height for consistent card size
+<<<<<<< HEAD
         # Reduced width as per user preference
         self.setFixedWidth(240)
         self.setMinimumHeight(160)
+=======
+        self.setFixedWidth(220)
+        self.setMinimumHeight(180)
+>>>>>>> parent of 91c3b27 (g)
 
         # Set size policy to prevent stretching
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)
@@ -74,9 +79,9 @@ class FacultyCard(QFrame):
         # Faculty text info
         text_layout = QVBoxLayout()
         text_layout.setAlignment(Qt.AlignLeft)
-        text_layout.setSpacing(4)  # Increased spacing between name and department
-        text_layout.setContentsMargins(0, 0, 0, 0)  # Remove margins to maximize text space
+        text_layout.setSpacing(2)
 
+<<<<<<< HEAD
         # Faculty name - improved styling for better readability with no border
         self.name_label = QLabel(self.faculty.name)
         self.name_label.setStyleSheet("""
@@ -106,6 +111,21 @@ class FacultyCard(QFrame):
         self.dept_label.setMinimumWidth(180)  # Ensure enough width for text
         self.dept_label.setMaximumWidth(200)  # Limit maximum width
         text_layout.addWidget(self.dept_label)
+=======
+        # Faculty name - reduced font size
+        name_label = QLabel(self.faculty.name)
+        name_label.setStyleSheet("font-size: 14pt; font-weight: bold;")
+        name_label.setAlignment(Qt.AlignLeft)
+        name_label.setWordWrap(True)
+        text_layout.addWidget(name_label)
+
+        # Department - reduced font size
+        dept_label = QLabel(self.faculty.department)
+        dept_label.setStyleSheet("font-size: 10pt; color: #666;")
+        dept_label.setAlignment(Qt.AlignLeft)
+        dept_label.setWordWrap(True)
+        text_layout.addWidget(dept_label)
+>>>>>>> parent of 91c3b27 (g)
 
         info_layout.addLayout(text_layout)
         main_layout.addLayout(info_layout)
@@ -446,15 +466,19 @@ class DashboardWindow(BaseWindow):
 
         # Faculty grid in a scroll area with improved spacing and alignment
         self.faculty_grid = QGridLayout()
+<<<<<<< HEAD
         self.faculty_grid.setSpacing(15)  # Reduced spacing between cards for better use of space
         self.faculty_grid.setAlignment(Qt.AlignTop | Qt.AlignHCenter)  # Align to top and center horizontally
         self.faculty_grid.setContentsMargins(10, 10, 10, 10)  # Reduced margins around the grid
+=======
+        self.faculty_grid.setSpacing(20)  # Increased spacing between cards
+        self.faculty_grid.setAlignment(Qt.AlignCenter)  # Center the grid contents
+        self.faculty_grid.setContentsMargins(15, 15, 15, 15)  # Add margins around the grid
+>>>>>>> parent of 91c3b27 (g)
 
-        # Create a scroll area for the faculty grid
         faculty_scroll = QScrollArea()
         faculty_scroll.setWidgetResizable(True)
         faculty_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        faculty_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         faculty_scroll.setStyleSheet("""
             QScrollArea {
                 background-color: transparent;
@@ -475,19 +499,10 @@ class DashboardWindow(BaseWindow):
             }
         """)
 
-        # Create a container widget for the faculty grid
         faculty_scroll_content = QWidget()
         faculty_scroll_content.setLayout(self.faculty_grid)
         faculty_scroll_content.setStyleSheet("background-color: transparent;")
-
-        # Set the scroll area widget
         faculty_scroll.setWidget(faculty_scroll_content)
-
-        # Ensure scroll area starts at the top
-        faculty_scroll.verticalScrollBar().setValue(0)
-
-        # Store the scroll area for later reference
-        self.faculty_scroll = faculty_scroll
 
         faculty_layout.addWidget(faculty_scroll)
 
@@ -512,11 +527,7 @@ class DashboardWindow(BaseWindow):
         # Try to restore previous splitter state
         self.restore_splitter_state()
 
-        # Add the splitter to the main layout
         main_layout.addWidget(content_splitter)
-
-        # Schedule a scroll to top after the UI is fully loaded
-        QTimer.singleShot(100, self._scroll_faculty_to_top)
 
         # Set the main layout to a widget and make it the central widget
         central_widget = QWidget()
@@ -541,11 +552,16 @@ class DashboardWindow(BaseWindow):
                 card_widget.deleteLater()
             self._faculty_cards_widgets.clear()
 
+<<<<<<< HEAD
             # Remove feedback labels if they are present
             # Check if widgets are part of the layout before removing
             if self.loading_label.parent() is self.faculty_grid.parentWidget(): # Or check layout directly
                  self.faculty_grid.removeWidget(self.loading_label)
             self.loading_label.setVisible(False)
+=======
+        # Fixed card width (matches the width set in FacultyCard)
+        card_width = 220
+>>>>>>> parent of 91c3b27 (g)
 
             if self.no_results_label.parent() is self.faculty_grid.parentWidget():
                  self.faculty_grid.removeWidget(self.no_results_label)
@@ -624,6 +640,7 @@ class DashboardWindow(BaseWindow):
 
             # Update the grid
             self.populate_faculty_grid(faculties)
+<<<<<<< HEAD
 
             # Ensure scroll area starts at the top
             if hasattr(self, 'faculty_scroll') and self.faculty_scroll:
@@ -632,6 +649,8 @@ class DashboardWindow(BaseWindow):
             # Update current faculty data for future comparisons
             self._current_faculty_data = self._extract_faculty_data(faculties)
 
+=======
+>>>>>>> parent of 91c3b27 (g)
         except Exception as e:
             logger.error(f"Error filtering faculty: {str(e)}")
             self.show_notification("Error filtering faculty list", "error")
@@ -689,6 +708,7 @@ class DashboardWindow(BaseWindow):
             # Update the grid only if there are changes or this is the first load
             self.populate_faculty_grid(faculties)
 
+<<<<<<< HEAD
             # Restore previous scroll position instead of always scrolling to top
             if hasattr(self, 'faculty_scroll') and self.faculty_scroll:
                 self.faculty_scroll.verticalScrollBar().setValue(current_scroll_position)
@@ -703,6 +723,10 @@ class DashboardWindow(BaseWindow):
             current_time = time.time()
             # Only refresh history every 3 minutes (180 seconds) - increased from 2 minutes
             if self.student and (current_time - getattr(self, '_last_history_refresh', 0) > 180):
+=======
+            # Also refresh consultation history if student is logged in
+            if self.student:
+>>>>>>> parent of 91c3b27 (g)
                 self.consultation_panel.refresh_history()
                 self._last_history_refresh = current_time
 
@@ -934,15 +958,6 @@ class DashboardWindow(BaseWindow):
                 QMessageBox.warning(self, "Warning", message)
             else:
                 QMessageBox.information(self, "Information", message)
-
-    def _scroll_faculty_to_top(self):
-        """
-        Scroll the faculty grid to the top.
-        This is called after the UI is fully loaded to ensure faculty cards are visible.
-        """
-        if hasattr(self, 'faculty_scroll') and self.faculty_scroll:
-            self.faculty_scroll.verticalScrollBar().setValue(0)
-            logger.debug("Scrolled faculty grid to top")
 
     def simulate_consultation_request(self):
         """

@@ -12,11 +12,10 @@ from logging.handlers import RotatingFileHandler
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 # Import configuration system
-from central_system.config import get_config, log_config_load_status
+from central_system.config import get_config
 
 # Initialize configuration early
 config = get_config()
-log_config_load_status()
 
 # Configure logging using settings from config.py
 log_level_str = config.get('logging.level', 'INFO').upper()
