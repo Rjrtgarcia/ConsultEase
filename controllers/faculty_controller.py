@@ -61,240 +61,301 @@ class FacultyController:
     def _notify_callbacks(self, faculty):
         """
         Notify all registered callbacks with the updated faculty information.
-        Uses safe faculty data to prevent DetachedInstanceError.
 
         Args:
             faculty (Faculty): Updated faculty object
         """
-        # Create safe faculty data dictionary to prevent DetachedInstanceError
-        safe_faculty_data = {
-            'id': faculty.id,
-            'name': faculty.name,
-            'department': faculty.department,
-            'status': faculty.status,
-            'last_seen': faculty.last_seen.isoformat() if faculty.last_seen else None,
-            'email': getattr(faculty, 'email', ''),
-            'ble_id': getattr(faculty, 'ble_id', ''),
-            'image_path': getattr(faculty, 'image_path', None),
-            'always_available': getattr(faculty, 'always_available', False),
-            'ntp_sync_status': getattr(faculty, 'ntp_sync_status', 'UNKNOWN'),
-            'grace_period_active': getattr(faculty, 'grace_period_active', False)
-        }
-
         for callback in self.callbacks:
             try:
-                callback(safe_faculty_data)
+                callback(faculty)
             except Exception as e:
                 logger.error(f"Error in Faculty controller callback: {str(e)}")
-                import traceback
-                logger.error(f"Callback traceback: {traceback.format_exc()}")
 
     def handle_faculty_status_update(self, topic, data):
         """
-        Handle faculty status update from MQTT with enhanced error handling.
+        Handle faculty status update from MQTT.
 
         Args:
             topic (str): MQTT topic
             data (dict or str): Status update data
         """
-        try:
-            logger.info(f"🔄 MQTT STATUS UPDATE - Topic: {topic}, Data: {data}, Type: {type(data)}")
+        logger.info(f"🔄 MQTT STATUS UPDATE - Topic: {topic}, Data: {data}, Type: {type(data)}")
 
-            # Validate input parameters
-            if not topic or not isinstance(topic, str):
-                logger.error(f"Invalid topic received: {topic}")
-                return
+        faculty_id = None
+        status = None
+        faculty_name = None
 
-            if data is None:
-                logger.warning(f"Received None data for topic: {topic}")
-                return
+        # Handle different topic formats
+        if topic.endswith("/mac_status"):
+            # This is a MAC address status update from the faculty desk unit
+            # Extract faculty ID from topic: consultease/faculty/{faculty_id}/mac_status
+            try:
+                faculty_id = int(topic.split("/")[2])
 
-            faculty_id = None
-            status = None
-            faculty_name = None
+                if isinstance(data, dict):
+                    status_str = data.get("status", "")
+                    detected_mac = data.get("mac", "")
 
-            # Handle different topic formats
-            if topic.endswith("/mac_status"):
-                # This is a MAC address status update from the faculty desk unit
-                # Extract faculty ID from topic: consultease/faculty/{faculty_id}/mac_status
-                try:
-                    faculty_id = int(topic.split("/")[2])
-
-                    if isinstance(data, dict):
-                        status_str = data.get("status", "")
-                        detected_mac = data.get("mac", "")
-
-                        if status_str == "faculty_present":
-                            status = True
-                            logger.info(f"Faculty {faculty_id} detected via MAC address: {detected_mac}")
-                        elif status_str == "faculty_absent":
-                            status = False
-                            logger.info(f"Faculty {faculty_id} no longer detected via MAC address")
-                        else:
-                            logger.warning(f"Unknown MAC status: {status_str}")
-                            return
-
-                        # Update faculty status in database
-                        faculty = self.update_faculty_status(faculty_id, status)
-
-                        if faculty:
-                            # Store the detected MAC address if present
-                            if detected_mac and status:
-                                # Normalize the MAC address
-                                normalized_mac = Faculty.normalize_mac_address(detected_mac)
-                                if normalized_mac != faculty.ble_id:
-                                    logger.info(f"Updating faculty {faculty_id} BLE ID from {faculty.ble_id} to {normalized_mac}")
-                                    # Update the BLE ID with the detected MAC address
-                                    db = get_db()
-                                    faculty.ble_id = normalized_mac
-                                    db.commit()
-
-                            # Notify callbacks
-                            self._notify_callbacks(faculty)
-
-                            # Publish notification
-                            try:
-                                notification = {
-                                    'type': 'faculty_mac_status',
-                                    'faculty_id': faculty.id,
-                                    'faculty_name': faculty.name,
-                                    'status': status,
-                                    'detected_mac': detected_mac,
-                                    'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
-                                }
-                                publish_mqtt_message(MQTTTopics.SYSTEM_NOTIFICATIONS, notification)
-                            except Exception as e:
-                                logger.error(f"Error publishing MAC status notification: {str(e)}")
-
+                    if status_str == "faculty_present":
+                        status = True
+                        logger.info(f"Faculty {faculty_id} detected via MAC address: {detected_mac}")
+                    elif status_str == "faculty_absent":
+                        status = False
+                        logger.info(f"Faculty {faculty_id} no longer detected via MAC address")
+                    else:
+                        logger.warning(f"Unknown MAC status: {status_str}")
                         return
 
-                except (ValueError, IndexError) as e:
-                    logger.error(f"Error parsing MAC status topic {topic}: {str(e)}")
+                    # Update faculty status in database
+                    faculty = self.update_faculty_status(faculty_id, status)
+
+                    if faculty:
+                        # Store the detected MAC address if present
+                        if detected_mac and status:
+                            # Normalize the MAC address
+                            normalized_mac = Faculty.normalize_mac_address(detected_mac)
+                            if normalized_mac != faculty.ble_id:
+                                logger.info(f"Updating faculty {faculty_id} BLE ID from {faculty.ble_id} to {normalized_mac}")
+                                # Update the BLE ID with the detected MAC address
+                                db = get_db()
+                                faculty.ble_id = normalized_mac
+                                db.commit()
+
+                        # Notify callbacks
+                        self._notify_callbacks(faculty)
+
+                        # Publish notification
+                        try:
+                            notification = {
+                                'type': 'faculty_mac_status',
+                                'faculty_id': faculty.id,
+                                'faculty_name': faculty.name,
+                                'status': status,
+                                'detected_mac': detected_mac,
+                                'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
+                            }
+                            publish_mqtt_message(MQTTTopics.SYSTEM_NOTIFICATIONS, notification)
+                        except Exception as e:
+                            logger.error(f"Error publishing MAC status notification: {str(e)}")
+
                     return
 
-            elif topic == MQTTTopics.LEGACY_FACULTY_STATUS:
-                # This is from the faculty desk unit using the legacy topic
-                # Check if this is a string message (keychain_connected or keychain_disconnected)
-                if isinstance(data, str):
-                    if data == "keychain_connected" or data == "faculty_present":
-                        status = True
-                        # Extract faculty name from client ID (DeskUnit_FacultyName)
-                        # This is more flexible than hardcoding a specific faculty name
-                        db = get_db()
-
-                        # Try to find any faculty with BLE configured
-                        faculty = db.query(Faculty).filter(Faculty.ble_id.isnot(None)).first()
-                        if faculty:
-                            faculty_id = faculty.id
-                            faculty_name = faculty.name
-                        else:
-                            logger.error("No faculty with BLE configuration found in database")
-                            return
-
-                    elif data == "keychain_disconnected" or data == "faculty_absent":
-                        status = False
-                        db = get_db()
-
-                        # Try to find any faculty with BLE configured
-                        faculty = db.query(Faculty).filter(Faculty.ble_id.isnot(None)).first()
-                        if faculty:
-                            faculty_id = faculty.id
-                            faculty_name = faculty.name
-                        else:
-                            logger.error("No faculty with BLE configuration found in database")
-                            return
-                else:
-                    # This is a JSON message
-                    status = data.get('status', False)
-                    faculty_id = data.get('faculty_id')
-                    faculty_name = data.get('faculty_name')
-
-            else:
-                # Extract faculty ID from topic (e.g., "consultease/faculty/123/status")
-                parts = topic.split('/')
-                if len(parts) != 4:
-                    logger.error(f"Invalid topic format: {topic}")
-                    return
-
-                try:
-                    faculty_id = int(parts[2])
-                except ValueError:
-                    logger.error(f"Invalid faculty ID in topic: {parts[2]}")
-                    return
-
-                # Get status from data
-                if isinstance(data, dict):
-                    if 'present' in data:
-                        status = bool(data.get('present'))
-                    elif 'status' in data:
-                        status_str = data.get('status', '').lower()
-                        if status_str in ['available', 'present', 'true']:
-                            status = True
-                        elif status_str in ['away', 'absent', 'false']:
-                            status = False
-                        else:
-                            status = bool(data.get('status', False))
-                    else:
-                        status = False
-
-                    faculty_name = data.get('faculty_name')
-                else:
-                    logger.error(f"Invalid data format for topic {topic}: {data}")
-                    return
-
-            # If we couldn't determine faculty ID or status, return
-            if faculty_id is None or status is None:
-                logger.error(f"❌ Could not determine faculty ID ({faculty_id}) or status ({status}) from topic {topic} and data {data}")
+            except (ValueError, IndexError) as e:
+                logger.error(f"Error parsing MAC status topic {topic}: {str(e)}")
                 return
 
-            # Update faculty status in database
-            faculty = self.update_faculty_status(faculty_id, status)
+        elif topic == MQTTTopics.LEGACY_FACULTY_STATUS:
+            # This is from the faculty desk unit using the legacy topic
+            # Check if this is a string message (keychain_connected or keychain_disconnected)
+            if isinstance(data, str):
+                if data == "keychain_connected" or data == "faculty_present":
+                    status = True
+                    # Extract faculty name from client ID (DeskUnit_FacultyName)
+                    # This is more flexible than hardcoding a specific faculty name
+                    db = get_db()
 
-            if faculty:
-                logger.info(f"✅ Successfully updated faculty {faculty.name} (ID: {faculty.id}) status to {status}")
+                    # Try to find the faculty from the MQTT client ID if available
+                    # If not available, look for faculty with BLE beacons configured
+                    faculty = None
+                elif data == "keychain_disconnected" or data == "faculty_absent":
+                    status = False
+                    db = get_db()
+                    faculty = None
 
-                # Notify consultation queue service about faculty status change
-                self.queue_service.update_faculty_status(faculty_id, status)
+                    # First, try to find any faculty with BLE configured and status=False
+                    # This assumes the BLE connection is for a faculty that was previously disconnected
+                    faculty = db.query(Faculty).filter(
+                        Faculty.ble_id.isnot(None),
+                        Faculty.status == False
+                    ).first()
 
-                # Create safe faculty data for callbacks to prevent DetachedInstanceError
-                safe_faculty_data = {
-                    'id': faculty.id,
-                    'name': faculty.name,
-                    'department': faculty.department,
-                    'status': faculty.status,
-                    'last_seen': faculty.last_seen.isoformat() if faculty.last_seen else None,
-                    'email': getattr(faculty, 'email', ''),
-                    'phone': getattr(faculty, 'phone', ''),
-                    'office_location': getattr(faculty, 'office_location', ''),
-                    'specialization': getattr(faculty, 'specialization', ''),
-                    'consultation_hours': getattr(faculty, 'consultation_hours', ''),
-                    'is_active': getattr(faculty, 'is_active', True),
-                    'created_at': faculty.created_at.isoformat() if getattr(faculty, 'created_at', None) else None,
-                    'updated_at': faculty.updated_at.isoformat() if getattr(faculty, 'updated_at', None) else None
-                }
+                    if faculty:
+                        faculty_id = faculty.id
+                        faculty_name = faculty.name
+                        logger.info(f"BLE beacon connected for faculty desk unit (ID: {faculty_id}, Name: {faculty_name})")
+                    else:
+                        # If no disconnected faculty found, look for any faculty with BLE configured
+                        faculty = db.query(Faculty).filter(
+                            Faculty.ble_id.isnot(None)
+                        ).first()
 
-                # Notify callbacks with safe data
-                self._notify_callbacks(safe_faculty_data)
+                        if faculty:
+                            faculty_id = faculty.id
+                            faculty_name = faculty.name
+                            logger.info(f"BLE beacon connected for faculty desk unit (ID: {faculty_id}, Name: {faculty_name})")
+                        else:
+                            logger.error("No faculty with BLE configuration found in database")
+                            return
+                elif data == "keychain_disconnected":
+                    status = False
+                    # Similar approach as above for finding the faculty
+                    db = get_db()
 
-                # Publish a notification about faculty availability using async MQTT
-                try:
-                    notification = {
-                        'type': 'faculty_status',
-                        'faculty_id': faculty.id,
-                        'faculty_name': faculty.name,
-                        'status': status,
-                        'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
-                    }
-                    publish_mqtt_message(MQTTTopics.SYSTEM_NOTIFICATIONS, notification)
-                except Exception as e:
-                    logger.error(f"Error publishing faculty status notification: {str(e)}")
+                    # First, try to find any faculty with BLE configured and status=True
+                    # This assumes the BLE disconnection is for a faculty that was previously connected
+                    faculty = db.query(Faculty).filter(
+                        Faculty.ble_id.isnot(None),
+                        Faculty.status == True
+                    ).first()
+
+                    if faculty:
+                        faculty_id = faculty.id
+                        faculty_name = faculty.name
+                        logger.info(f"BLE beacon disconnected for faculty desk unit (ID: {faculty_id}, Name: {faculty_name})")
+                    else:
+                        # If no connected faculty found, look for any faculty with BLE configured
+                        faculty = db.query(Faculty).filter(
+                            Faculty.ble_id.isnot(None)
+                        ).first()
+
+                        if faculty:
+                            faculty_id = faculty.id
+                            faculty_name = faculty.name
+                            logger.info(f"BLE beacon disconnected for faculty desk unit (ID: {faculty_id}, Name: {faculty_name})")
+                        else:
+                            logger.error("No faculty with BLE configuration found in database")
+                            return
             else:
-                logger.error(f"❌ Failed to update faculty {faculty_id} status in database")
+                # This is a JSON message
+                status = data.get('status', False)
+                faculty_id = data.get('faculty_id')
+                faculty_name = data.get('faculty_name')
 
-        except Exception as e:
-            logger.error(f"Unexpected error in handle_faculty_status_update: {e}")
-            import traceback
-            logger.error(f"Full traceback: {traceback.format_exc()}")
+                if faculty_id is None and faculty_name is not None:
+                    # Try to find faculty by name
+                    db = get_db()
+                    faculty = db.query(Faculty).filter(Faculty.name == faculty_name).first()
+                    if faculty:
+                        faculty_id = faculty.id
+                    else:
+                        logger.error(f"Faculty '{faculty_name}' not found in database")
+                        return
+                elif faculty_id is None:
+                    # No faculty ID or name provided, try to find any faculty with BLE configured
+                    db = get_db()
+                    faculty = db.query(Faculty).filter(
+                        Faculty.ble_id.isnot(None)
+                    ).first()
+
+                    if faculty:
+                        faculty_id = faculty.id
+                        faculty_name = faculty.name
+                    else:
+                        logger.error("No faculty with BLE configuration found in database")
+                        return
+        else:
+            # Extract faculty ID from topic (e.g., "consultease/faculty/123/status")
+            parts = topic.split('/')
+            if len(parts) != 4:
+                logger.error(f"Invalid topic format: {topic}")
+                return
+
+            try:
+                faculty_id = int(parts[2])
+            except ValueError:
+                logger.error(f"Invalid faculty ID in topic: {parts[2]}")
+                return
+
+            # Get status from data
+            if isinstance(data, dict):
+                logger.info(f"📊 Processing dict data for faculty {faculty_id}: {data}")
+
+                # Handle enhanced status data from updated faculty desk units
+                if 'present' in data:
+                    status = bool(data.get('present'))
+                    logger.info(f"✅ Found 'present' field: {data.get('present')} -> status: {status}")
+                elif 'status' in data:
+                    status_str = data.get('status', '').lower()
+                    logger.info(f"📝 Found 'status' field: {status_str}")
+                    if status_str in ['available', 'present', 'true']:
+                        status = True
+                    elif status_str in ['away', 'absent', 'false']:
+                        status = False
+                    else:
+                        status = bool(data.get('status', False))
+                    logger.info(f"✅ Processed status string '{status_str}' -> status: {status}")
+                else:
+                    status = False
+                    logger.warning(f"⚠️ No 'present' or 'status' field found in data, defaulting to False")
+
+                faculty_name = data.get('faculty_name')
+                logger.info(f"👤 Faculty name from data: {faculty_name}")
+
+                # Extract enhanced status information
+                ntp_sync_status = data.get('ntp_sync_status', 'UNKNOWN')
+                grace_period_active = data.get('in_grace_period', False)
+                detailed_status = data.get('detailed_status', '')
+
+                # Update faculty with enhanced information
+                self._update_faculty_enhanced_status(faculty_id, status, ntp_sync_status, grace_period_active)
+
+                # Log enhanced status information
+                if grace_period_active:
+                    grace_remaining = data.get('grace_period_remaining', 0) // 1000  # Convert to seconds
+                    logger.info(f"Faculty {faculty_id} in grace period: {grace_remaining}s remaining")
+
+                if ntp_sync_status in ["FAILED", "SYNCING"]:
+                    logger.warning(f"Faculty {faculty_id} NTP sync issue: {ntp_sync_status}")
+
+                # Check if this is a BLE beacon status update (legacy support)
+                if 'keychain_connected' in data:
+                    status = True
+                    logger.info(f"BLE beacon connected for faculty {faculty_id}")
+                elif 'keychain_disconnected' in data:
+                    status = False
+                    logger.info(f"BLE beacon disconnected for faculty {faculty_id}")
+            else:
+                logger.error(f"Invalid data format for topic {topic}: {data}")
+                return
+
+        # If we couldn't determine faculty ID or status, return
+        if faculty_id is None or status is None:
+            logger.error(f"❌ Could not determine faculty ID ({faculty_id}) or status ({status}) from topic {topic} and data {data}")
+            return
+
+        logger.info(f"🎯 FINAL STATUS UPDATE - Faculty ID: {faculty_id}, Status: {status}, Topic: {topic}")
+
+        # Update faculty status in database
+        logger.info(f"💾 Attempting database update for faculty {faculty_id} with status {status}")
+        faculty = self.update_faculty_status(faculty_id, status)
+
+        if faculty:
+            logger.info(f"✅ Successfully updated faculty {faculty.name} (ID: {faculty.id}) status to {status}")
+
+            # Verify the update by checking current status
+            try:
+                from ..services.database_manager import get_database_manager
+                db_manager = get_database_manager()
+                with db_manager.get_session_context() as db:
+                    updated_faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
+                    if updated_faculty:
+                        logger.info(f"🔍 Database verification: Faculty {updated_faculty.name} status is now {updated_faculty.status}")
+                    else:
+                        logger.error(f"🔍 Database verification failed: Faculty {faculty_id} not found")
+            except Exception as e:
+                logger.error(f"🔍 Database verification error: {e}")
+        else:
+            logger.error(f"❌ Failed to update faculty {faculty_id} status in database")
+
+        if faculty:
+            # Notify consultation queue service about faculty status change
+            self.queue_service.update_faculty_status(faculty_id, status)
+
+            # Notify callbacks
+            self._notify_callbacks(faculty)
+
+            # Publish a notification about faculty availability using async MQTT
+            try:
+                notification = {
+                    'type': 'faculty_status',
+                    'faculty_id': faculty.id,
+                    'faculty_name': faculty.name,
+                    'status': status,
+                    'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None
+                }
+                publish_mqtt_message(MQTTTopics.SYSTEM_NOTIFICATIONS, notification)
+            except Exception as e:
+                logger.error(f"Error publishing faculty status notification: {str(e)}")
 
     def update_faculty_status(self, faculty_id, status):
         """
@@ -368,24 +429,7 @@ class FacultyController:
                 # Publish MQTT notification with sequence number to ensure ordering
                 self._publish_status_update_with_sequence_safe(faculty_data, status, previous_status)
 
-                # Return a safe faculty object that won't cause DetachedInstanceError
-                # Create a detached copy of the faculty object with all needed attributes
-                safe_faculty = Faculty()
-                safe_faculty.id = faculty.id
-                safe_faculty.name = faculty.name
-                safe_faculty.department = faculty.department
-                safe_faculty.status = faculty.status
-                safe_faculty.last_seen = faculty.last_seen
-                safe_faculty.email = getattr(faculty, 'email', '')
-                safe_faculty.ble_id = getattr(faculty, 'ble_id', '')
-                safe_faculty.image_path = getattr(faculty, 'image_path', None)
-                safe_faculty.always_available = getattr(faculty, 'always_available', False)
-                safe_faculty.ntp_sync_status = getattr(faculty, 'ntp_sync_status', 'UNKNOWN')
-                safe_faculty.grace_period_active = getattr(faculty, 'grace_period_active', False)
-                safe_faculty.created_at = getattr(faculty, 'created_at', None)
-                safe_faculty.updated_at = getattr(faculty, 'updated_at', None)
-
-                return safe_faculty
+                return faculty
 
             except Exception as e:
                 logger.error(f"Error updating faculty status atomically: {str(e)}")

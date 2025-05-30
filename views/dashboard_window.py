@@ -223,7 +223,7 @@ class DashboardWindow(BaseWindow):
         # Set up smart refresh manager for optimized faculty status updates
         self.smart_refresh = SmartRefreshManager(base_interval=180000, max_interval=600000)
         self.refresh_timer = QTimer(self)
-        self.refresh_timer.timeout.connect(self._refresh_faculty_status_timer)
+        self.refresh_timer.timeout.connect(self.refresh_faculty_status)
         self.refresh_timer.start(180000)  # Start with 3 minutes
 
         # UI performance utilities
@@ -1021,18 +1021,6 @@ class DashboardWindow(BaseWindow):
             logger.error(f"Error filtering faculty: {str(e)}")
             self.show_notification("Error filtering faculty list", "error")
 
-    def _refresh_faculty_status_timer(self):
-        """
-        Timer-triggered refresh method that calls the main refresh method.
-        This separates timer-based refreshes from manual/MQTT-based refreshes.
-        """
-        try:
-            self.refresh_faculty_status()
-        except Exception as e:
-            logger.error(f"Error in timer-triggered faculty status refresh: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-
     def refresh_faculty_status(self):
         """
         Refresh the faculty status from the server with optimizations to reduce loading indicators.
@@ -1176,32 +1164,12 @@ class DashboardWindow(BaseWindow):
         Show the consultation request form for a specific faculty.
 
         Args:
-            faculty (object or dict): Faculty object or faculty data dictionary
+            faculty (object): Faculty object to request consultation with
         """
-        # Handle both Faculty objects and faculty data dictionaries
-        if isinstance(faculty, dict):
-            faculty_id = faculty.get('id')
-            faculty_name = faculty.get('name')
-            faculty_status = faculty.get('status')
-            faculty_department = faculty.get('department', '')
-            faculty_email = faculty.get('email', '')
-        else:
-            # Handle Faculty object (with potential DetachedInstanceError protection)
-            try:
-                faculty_id = faculty.id
-                faculty_name = faculty.name
-                faculty_status = faculty.status
-                faculty_department = getattr(faculty, 'department', '')
-                faculty_email = getattr(faculty, 'email', '')
-            except Exception as e:
-                logger.error(f"Error accessing faculty object attributes: {e}")
-                self.show_notification("Error accessing faculty information.", "error")
-                return
-
         # Check if faculty is available
-        if not faculty_status:
+        if not faculty.status:
             self.show_notification(
-                f"Faculty {faculty_name} is currently unavailable for consultation.",
+                f"Faculty {faculty.name} is currently unavailable for consultation.",
                 "error"
             )
             return
@@ -1212,17 +1180,8 @@ class DashboardWindow(BaseWindow):
             faculty_controller = FacultyController()
             available_faculty = faculty_controller.get_all_faculty(filter_available=True)
 
-            # Create a safe faculty data dictionary for the consultation panel
-            safe_faculty_data = {
-                'id': faculty_id,
-                'name': faculty_name,
-                'status': faculty_status,
-                'department': faculty_department,
-                'email': faculty_email
-            }
-
             # Set the faculty and faculty options in the consultation panel
-            self.consultation_panel.set_faculty(safe_faculty_data)
+            self.consultation_panel.set_faculty(faculty)
             self.consultation_panel.set_faculty_options(available_faculty)
         except Exception as e:
             logger.error(f"Error loading available faculty for consultation form: {str(e)}")
@@ -1232,29 +1191,11 @@ class DashboardWindow(BaseWindow):
         Handle consultation request submission.
 
         Args:
-            faculty (object or dict): Faculty object or faculty data dictionary
+            faculty (object): Faculty object
             message (str): Consultation request message
             course_code (str): Optional course code
         """
         try:
-            # Handle both Faculty objects and faculty data dictionaries
-            if isinstance(faculty, dict):
-                faculty_id = faculty.get('id')
-                faculty_name = faculty.get('name')
-            else:
-                # Handle Faculty object (with potential DetachedInstanceError protection)
-                try:
-                    faculty_id = faculty.id
-                    faculty_name = faculty.name
-                except Exception as e:
-                    logger.error(f"Error accessing faculty object attributes: {e}")
-                    QMessageBox.warning(
-                        self,
-                        "Consultation Request",
-                        "Error accessing faculty information."
-                    )
-                    return
-
             # Import consultation controller
             from ..controllers import ConsultationController
 
@@ -1281,7 +1222,7 @@ class DashboardWindow(BaseWindow):
 
                 consultation = consultation_controller.create_consultation(
                     student_id=student_id,
-                    faculty_id=faculty_id,
+                    faculty_id=faculty.id,
                     request_message=message,
                     course_code=course_code
                 )
@@ -1291,7 +1232,7 @@ class DashboardWindow(BaseWindow):
                     QMessageBox.information(
                         self,
                         "Consultation Request",
-                        f"Your consultation request with {faculty_name} has been submitted."
+                        f"Your consultation request with {faculty.name} has been submitted."
                     )
 
                     # Refresh the consultation history
@@ -1575,60 +1516,6 @@ class DashboardWindow(BaseWindow):
             logger.error(f"Traceback: {traceback.format_exc()}")
             # Show error message in the faculty grid
             self._show_error_message(f"Error loading faculty data: {str(e)}")
-
-    def refresh_faculty_status_realtime(self, faculty_data):
-        """
-        Refresh faculty status in real-time based on MQTT updates.
-
-        Args:
-            faculty_data (dict): Faculty status data from MQTT
-        """
-        try:
-            faculty_id = faculty_data.get('id')
-            faculty_name = faculty_data.get('name')
-            faculty_status = faculty_data.get('status')
-
-            logger.info(f"🔄 Refreshing faculty status - ID: {faculty_id}, Name: {faculty_name}, Status: {faculty_status}")
-
-            # Update the faculty card if it exists
-            if hasattr(self, 'faculty_card_manager') and self.faculty_card_manager:
-                # Use the manager's update method which handles the dictionary correctly
-                logger.info(f"📱 Updating faculty card for {faculty_name}")
-                self.faculty_card_manager.update_faculty_status(faculty_id, faculty_status)
-
-            # Also refresh the entire faculty grid to ensure consistency
-            # This is a lightweight operation that ensures all cards are up-to-date
-            QTimer.singleShot(100, self._refresh_faculty_grid_lightweight)
-
-        except Exception as e:
-            logger.error(f"Error refreshing faculty status: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-
-    def _refresh_faculty_grid_lightweight(self):
-        """
-        Lightweight refresh of faculty grid that only updates status without recreating cards.
-        """
-        try:
-            # Import faculty controller
-            from ..controllers import FacultyController
-
-            # Get faculty controller
-            faculty_controller = FacultyController()
-
-            # Get current faculty data
-            faculties = faculty_controller.get_all_faculty()
-
-            # Update existing cards with new status
-            if hasattr(self, 'faculty_card_manager') and self.faculty_card_manager:
-                for faculty in faculties:
-                    # Use the manager's update method which handles the dictionary correctly
-                    self.faculty_card_manager.update_faculty_status(faculty.id, faculty.status)
-
-            logger.debug("Lightweight faculty grid refresh completed")
-
-        except Exception as e:
-            logger.error(f"Error in lightweight faculty grid refresh: {e}")
 
     def closeEvent(self, event):
         """
