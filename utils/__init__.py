@@ -1,4 +1,4 @@
-from .keyboard_handler import KeyboardHandler, install_keyboard_handler
+from .keyboard_manager import KeyboardManager, get_keyboard_manager, install_keyboard_manager
 from .stylesheet import get_dark_stylesheet, get_light_stylesheet, apply_stylesheet
 from .icons import IconProvider, Icons, initialize as initialize_icons
 from .ui_components import (
@@ -9,9 +9,10 @@ from .security import Security
 from .transitions import WindowTransitionManager
 
 __all__ = [
-    # Keyboard handler
-    'KeyboardHandler',
-    'install_keyboard_handler',
+    # Keyboard manager
+    'KeyboardManager',
+    'get_keyboard_manager',
+    'install_keyboard_manager',
 
     # Stylesheet
     'get_dark_stylesheet',

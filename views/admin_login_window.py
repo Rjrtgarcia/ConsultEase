@@ -1,10 +1,14 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QPushButton, QLineEdit, QFrame, QMessageBox, QFormLayout)
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QIcon
 
 import os
+import logging
 from .base_window import BaseWindow
+from .admin_account_creation_dialog import AdminAccountCreationDialog
+
+logger = logging.getLogger(__name__)
 
 class AdminLoginWindow(BaseWindow):
     """
@@ -15,7 +19,12 @@ class AdminLoginWindow(BaseWindow):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.admin_controller = None  # Will be set by main application
         self.init_ui()
+
+    def set_admin_controller(self, admin_controller):
+        """Set the admin controller for first-time setup detection."""
+        self.admin_controller = admin_controller
 
     def init_ui(self):
         """
@@ -229,16 +238,23 @@ class AdminLoginWindow(BaseWindow):
 
     def showEvent(self, event):
         """
-        Override showEvent to trigger the keyboard when the window is shown.
+        Override showEvent to trigger the keyboard and check for first-time setup.
         """
         super().showEvent(event)
 
-        # Import necessary modules
+        # Import necessary modules at the beginning
         import logging
         import subprocess
         import sys
-        from PyQt5.QtCore import QTimer
         from PyQt5.QtWidgets import QApplication
+
+        # Clear any previous inputs
+        self.username_input.clear()
+        self.password_input.clear()
+        self.error_label.setVisible(False)
+
+        # Check for first-time setup (using QTimer from top-level imports)
+        QTimer.singleShot(100, self.check_first_time_setup)
 
         logger = logging.getLogger(__name__)
         logger.info("AdminLoginWindow shown, triggering keyboard")
@@ -290,3 +306,104 @@ class AdminLoginWindow(BaseWindow):
                 logger.error(f"Error showing keyboard: {str(e)}")
                 import traceback
                 logger.error(f"Traceback: {traceback.format_exc()}")
+
+    def check_first_time_setup(self):
+        """
+        Check if this is a first-time setup and show account creation dialog if needed.
+        """
+        try:
+            logger.info("🔍 Checking for first-time setup...")
+
+            if not self.admin_controller:
+                logger.warning("⚠️  No admin controller available for first-time setup check")
+                return
+
+            # Check admin accounts exist
+            accounts_exist = self.admin_controller.check_admin_accounts_exist()
+            logger.info(f"📊 Admin accounts exist: {accounts_exist}")
+
+            # Check if first-time setup is needed
+            is_first_time = self.admin_controller.is_first_time_setup()
+            logger.info(f"🎯 Is first-time setup: {is_first_time}")
+
+            if is_first_time:
+                logger.info("✅ First-time setup detected - no admin accounts found")
+                logger.info("🎭 Showing first-time setup dialog...")
+                self.show_first_time_setup_dialog()
+            else:
+                logger.info("📋 Admin accounts exist - first-time setup not needed")
+
+        except Exception as e:
+            logger.error(f"❌ Error checking first-time setup: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            # Continue with normal login if check fails
+
+    def show_first_time_setup_dialog(self):
+        """
+        Show the first-time setup dialog for creating an admin account.
+        """
+        try:
+            logger.info("🎭 Creating AdminAccountCreationDialog...")
+            dialog = AdminAccountCreationDialog(self)
+            logger.info("✅ AdminAccountCreationDialog created successfully")
+
+            logger.info("🔗 Connecting account_created signal...")
+            dialog.account_created.connect(self.handle_account_created)
+            logger.info("✅ Signal connected successfully")
+
+            logger.info("📱 Showing first-time setup dialog...")
+            # Show the dialog
+            result = dialog.exec_()
+            logger.info(f"📋 Dialog result: {result}")
+
+            if result == dialog.Rejected:
+                logger.info("❌ User cancelled first-time setup")
+                # User cancelled - show message and allow manual login attempt
+                QMessageBox.information(
+                    self,
+                    "Setup Cancelled",
+                    "First-time setup was cancelled.\n\n"
+                    "You can still try to login if an admin account exists, "
+                    "or restart the application to run setup again."
+                )
+            else:
+                logger.info("✅ First-time setup dialog completed")
+
+        except Exception as e:
+            logger.error(f"❌ Error showing first-time setup dialog: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            QMessageBox.critical(
+                self,
+                "Setup Error",
+                f"Failed to show account creation dialog: {str(e)}\n\n"
+                "Please try logging in manually or restart the application."
+            )
+
+    def handle_account_created(self, admin_info):
+        """
+        Handle successful account creation from the first-time setup dialog.
+
+        Args:
+            admin_info (dict): Information about the created admin account
+        """
+        try:
+            logger.info(f"Admin account created successfully: {admin_info['username']}")
+
+            # Refresh the admin controller cache
+            if self.admin_controller:
+                self.admin_controller.check_admin_accounts_exist(force_refresh=True)
+
+            # Automatically authenticate the newly created admin
+            # Emit the authentication signal to proceed to dashboard
+            self.admin_authenticated.emit((admin_info['username'], None))  # Password not needed for auto-login
+
+        except Exception as e:
+            logger.error(f"Error handling account creation: {e}")
+            QMessageBox.critical(
+                self,
+                "Login Error",
+                f"Account was created but automatic login failed: {str(e)}\n\n"
+                "Please try logging in manually with your new credentials."
+            )

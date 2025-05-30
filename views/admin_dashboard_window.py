@@ -2,7 +2,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QPushButton, QTabWidget, QTableWidget, QTableWidgetItem,
                                QHeaderView, QFrame, QDialog, QFormLayout, QLineEdit,
                                QDialogButtonBox, QMessageBox, QComboBox, QCheckBox,
-                               QGroupBox, QFileDialog, QTextEdit, QApplication)
+                               QGroupBox, QFileDialog, QTextEdit, QApplication, QScrollArea)
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QIcon, QFont, QTextCursor
 
@@ -10,8 +10,11 @@ import os
 import logging
 from .base_window import BaseWindow
 from ..controllers import FacultyController
-from ..models import Student, get_db
+from ..models import Student, get_db, Faculty
 from ..services import get_rfid_service
+from ..utils.input_sanitizer import (
+    sanitize_string, sanitize_email, sanitize_filename, sanitize_path, sanitize_boolean
+)
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -37,8 +40,11 @@ class AdminDashboardWindow(BaseWindow):
         # Set window title
         self.setWindowTitle("ConsultEase - Admin Dashboard")
 
-        # Main layout
-        main_layout = QVBoxLayout()
+        # Create a main container widget for the scroll area
+        main_container = QWidget()
+        main_layout = QVBoxLayout(main_container)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(10)
 
         # Header with admin info and logout button
         header_layout = QHBoxLayout()
@@ -56,9 +62,22 @@ class AdminDashboardWindow(BaseWindow):
         admin_label.setStyleSheet("font-size: 16pt; font-weight: bold;")
         header_layout.addWidget(admin_label)
 
-        # Logout button
+        # Logout button - smaller size
         logout_button = QPushButton("Logout")
-        logout_button.setFixedWidth(100)
+        logout_button.setFixedSize(80, 30)
+        logout_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                border-radius: 4px;
+                font-size: 10pt;
+                font-weight: bold;
+                padding: 2px 8px;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+        """)
         logout_button.clicked.connect(self.logout)
         header_layout.addWidget(logout_button)
 
@@ -76,17 +95,57 @@ class AdminDashboardWindow(BaseWindow):
 
         self.system_tab = SystemMaintenanceTab()
 
+        # Import and create system monitoring tab
+        from .system_monitoring_widget import SystemMonitoringWidget
+        self.monitoring_tab = SystemMonitoringWidget()
+
         # Add tabs to tab widget
         self.tab_widget.addTab(self.faculty_tab, "Faculty Management")
         self.tab_widget.addTab(self.student_tab, "Student Management")
         self.tab_widget.addTab(self.system_tab, "System Maintenance")
+        self.tab_widget.addTab(self.monitoring_tab, "System Monitoring")
 
         main_layout.addWidget(self.tab_widget)
 
-        # Set the central widget
-        central_widget = QWidget()
-        central_widget.setLayout(main_layout)
-        self.setCentralWidget(central_widget)
+        # Create a scroll area and set its properties
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)  # Allow the widget to resize
+        scroll_area.setWidget(main_container)  # Set the main container as the scroll area's widget
+
+        # Only show scrollbars when needed
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        # Style the scroll area with improved visibility and touch-friendliness
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #f0f0f0;
+                width: 15px;  /* Increased width for better touch targets */
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #adb5bd;  /* Darker color for better visibility */
+                min-height: 30px;  /* Increased minimum height for better touch targets */
+                border-radius: 7px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #868e96;  /* Even darker on hover */
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+        """)
+
+        # Set the scroll area as the central widget
+        self.setCentralWidget(scroll_area)
 
     def logout(self):
         """
@@ -140,33 +199,121 @@ class FacultyManagementTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.faculty_controller = FacultyController()
+
+        # Set up auto-refresh timer for real-time updates
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.timeout.connect(self.refresh_data)
+        self.refresh_timer.start(30000)  # Refresh every 30 seconds
+
+        # Track last data hash to avoid unnecessary UI updates
+        self._last_data_hash = None
+
+        # Loading state management
+        self._is_loading = False
+        self._loading_widget = None
+
+        # Error state tracking
+        self._last_error_time = None
+        self._consecutive_errors = 0
+
         self.init_ui()
 
     def init_ui(self):
         """
         Initialize the UI components.
         """
-        # Main layout
-        main_layout = QVBoxLayout()
+        # Create a container widget for the scroll area
+        container = QWidget()
 
-        # Buttons for actions
+        # Main layout
+        main_layout = QVBoxLayout(container)
+
+        # Buttons for actions with improved touch-friendly styling
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)  # Better spacing between buttons
+
+        # Common button style for touch-friendly interface
+        button_style = """
+            QPushButton {
+                font-size: 14pt;
+                font-weight: bold;
+                padding: 12px 20px;
+                border-radius: 8px;
+                border: none;
+                min-height: 44px;
+                min-width: 120px;
+            }
+            QPushButton:hover {
+                opacity: 0.8;
+            }
+            QPushButton:pressed {
+                transform: scale(0.95);
+            }
+        """
 
         self.add_button = QPushButton("Add Faculty")
-        self.add_button.setStyleSheet("background-color: #4CAF50; color: white;")
+        self.add_button.setStyleSheet(button_style + """
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
         self.add_button.clicked.connect(self.add_faculty)
         button_layout.addWidget(self.add_button)
 
         self.edit_button = QPushButton("Edit Faculty")
+        self.edit_button.setStyleSheet(button_style + """
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
         self.edit_button.clicked.connect(self.edit_faculty)
         button_layout.addWidget(self.edit_button)
 
         self.delete_button = QPushButton("Delete Faculty")
-        self.delete_button.setStyleSheet("background-color: #F44336; color: white;")
+        self.delete_button.setStyleSheet(button_style + """
+            QPushButton {
+                background-color: #F44336;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+        """)
         self.delete_button.clicked.connect(self.delete_faculty)
         button_layout.addWidget(self.delete_button)
 
+        # Add beacon management button
+        self.beacon_button = QPushButton("Beacon Management")
+        self.beacon_button.setStyleSheet(button_style + """
+            QPushButton {
+                background-color: #FF9800;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #F57C00;
+            }
+        """)
+        self.beacon_button.clicked.connect(self.open_beacon_management)
+        button_layout.addWidget(self.beacon_button)
+
         self.refresh_button = QPushButton("Refresh")
+        self.refresh_button.setStyleSheet(button_style + """
+            QPushButton {
+                background-color: #9E9E9E;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #757575;
+            }
+        """)
         self.refresh_button.clicked.connect(self.refresh_data)
         button_layout.addWidget(self.refresh_button)
 
@@ -174,7 +321,7 @@ class FacultyManagementTab(QWidget):
 
         main_layout.addLayout(button_layout)
 
-        # Faculty table
+        # Faculty table with improved touch-friendly styling
         self.faculty_table = QTableWidget()
         self.faculty_table.setColumnCount(7)
         self.faculty_table.setHorizontalHeaderLabels(["ID", "Name", "Department", "Email", "BLE ID", "Status", "Always Available"])
@@ -183,24 +330,128 @@ class FacultyManagementTab(QWidget):
         self.faculty_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.faculty_table.setSelectionMode(QTableWidget.SingleSelection)
 
+        # Improve table styling for touch interface
+        self.faculty_table.setStyleSheet("""
+            QTableWidget {
+                gridline-color: #ddd;
+                background-color: white;
+                alternate-background-color: #f9f9f9;
+                selection-background-color: #3498db;
+                font-size: 12pt;
+            }
+            QTableWidget::item {
+                padding: 12px 8px;
+                border-bottom: 1px solid #eee;
+                min-height: 40px;
+            }
+            QTableWidget::item:selected {
+                background-color: #3498db;
+                color: white;
+            }
+            QHeaderView::section {
+                background-color: #34495e;
+                color: white;
+                padding: 12px 8px;
+                border: none;
+                font-weight: bold;
+                font-size: 12pt;
+                min-height: 44px;
+            }
+            QHeaderView::section:hover {
+                background-color: #2c3e50;
+            }
+        """)
+
+        # Enable alternating row colors for better readability
+        self.faculty_table.setAlternatingRowColors(True)
+
         main_layout.addWidget(self.faculty_table)
 
-        # Set the layout
-        self.setLayout(main_layout)
+        # Add some spacing at the bottom for better appearance
+        main_layout.addSpacing(10)
+
+        # Create a scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(container)
+
+        # Only show scrollbars when needed
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        # Style the scroll area with improved visibility and touch-friendliness
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #f0f0f0;
+                width: 15px;  /* Increased width for better touch targets */
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #adb5bd;  /* Darker color for better visibility */
+                min-height: 30px;  /* Increased minimum height for better touch targets */
+                border-radius: 7px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #868e96;  /* Even darker on hover */
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+        """)
+
+        # Create a layout for the tab and add the scroll area
+        tab_layout = QVBoxLayout(self)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.addWidget(scroll_area)
 
         # Initial data load
         self.refresh_data()
 
     def refresh_data(self):
         """
-        Refresh the faculty data in the table.
+        Refresh the faculty data in the table with optimized updates.
+        Only updates the UI if data has actually changed.
         """
-        # Clear the table
-        self.faculty_table.setRowCount(0)
-
         try:
+            # Show loading indicator for initial load
+            if self._last_data_hash is None:
+                self._show_loading_indicator()
+
             # Get all faculty from the controller
             faculties = self.faculty_controller.get_all_faculty()
+
+            # Reset error tracking on successful data fetch
+            self._consecutive_errors = 0
+            self._last_error_time = None
+
+            # Create a hash of the current data to check for changes
+            import hashlib
+            faculty_data_str = str([(f.id, f.name, f.department, f.email, f.ble_id, f.status, f.always_available) for f in faculties])
+            current_hash = hashlib.md5(faculty_data_str.encode()).hexdigest()
+
+            # Only update UI if data has changed
+            if current_hash == self._last_data_hash:
+                self._hide_loading_indicator()
+                return
+
+            self._last_data_hash = current_hash
+
+            # Hide loading indicator before updating table
+            self._hide_loading_indicator()
+
+            # Temporarily disable updates for better performance
+            self.faculty_table.setUpdatesEnabled(False)
+
+            # Clear the table
+            self.faculty_table.setRowCount(0)
 
             for faculty in faculties:
                 row_position = self.faculty_table.rowCount()
@@ -211,7 +462,7 @@ class FacultyManagementTab(QWidget):
                 self.faculty_table.setItem(row_position, 1, QTableWidgetItem(faculty.name))
                 self.faculty_table.setItem(row_position, 2, QTableWidgetItem(faculty.department))
                 self.faculty_table.setItem(row_position, 3, QTableWidgetItem(faculty.email))
-                self.faculty_table.setItem(row_position, 4, QTableWidgetItem(faculty.ble_id))
+                self.faculty_table.setItem(row_position, 4, QTableWidgetItem(faculty.ble_id or ""))
 
                 status_item = QTableWidgetItem("Available" if faculty.status else "Unavailable")
                 if faculty.status:
@@ -226,22 +477,192 @@ class FacultyManagementTab(QWidget):
                     always_available_item.setBackground(Qt.green)
                 self.faculty_table.setItem(row_position, 6, always_available_item)
 
+            # Re-enable updates
+            self.faculty_table.setUpdatesEnabled(True)
+
+            # Show empty state message if no faculty
+            if len(faculties) == 0:
+                self._show_empty_faculty_table_message()
+
+            logger.debug(f"Faculty table refreshed with {len(faculties)} entries")
+
         except Exception as e:
             logger.error(f"Error refreshing faculty data: {str(e)}")
-            QMessageBox.warning(self, "Data Error", f"Failed to refresh faculty data: {str(e)}")
+
+            # Hide loading indicator on error
+            self._hide_loading_indicator()
+
+            # Track consecutive errors
+            import time
+            self._consecutive_errors += 1
+            self._last_error_time = time.time()
+
+            # Show error in table if this is a persistent issue
+            if self._consecutive_errors >= 3:
+                self._show_error_in_table(f"Error loading faculty data: {str(e)}")
+
+            # Only show warning for serious errors, not during normal auto-refresh
+            if self._consecutive_errors == 1:  # Only show on first error
+                if "Connection refused" in str(e) or "Database error" in str(e):
+                    QMessageBox.warning(self, "Data Error", f"Failed to refresh faculty data: {str(e)}")
+
+            # Slow down refresh rate if we're having persistent errors
+            if self._consecutive_errors >= 5:
+                self.refresh_timer.setInterval(60000)  # Slow down to 1 minute
+                logger.warning("Slowing down refresh rate due to persistent errors")
+
+    def _show_empty_faculty_table_message(self):
+        """
+        Show a message in the table when no faculty members exist.
+        """
+        # Add a single row with a message spanning all columns
+        self.faculty_table.insertRow(0)
+
+        # Create a message item
+        message_item = QTableWidgetItem("No faculty members found. Click 'Add Faculty' to add the first faculty member.")
+        message_item.setTextAlignment(Qt.AlignCenter)
+        message_item.setFlags(Qt.ItemIsEnabled)  # Make it non-selectable
+
+        # Style the message
+        from PyQt5.QtGui import QFont, QColor
+        font = QFont()
+        font.setItalic(True)
+        font.setPointSize(14)
+        message_item.setFont(font)
+        message_item.setForeground(QColor("#666"))
+
+        # Set the item in the first column and span all columns
+        self.faculty_table.setItem(0, 0, message_item)
+        self.faculty_table.setSpan(0, 0, 1, 7)  # Span all 7 columns
+
+    def _show_loading_indicator(self):
+        """
+        Show a loading indicator in the faculty table.
+        """
+        if self._is_loading:
+            return  # Already showing loading indicator
+
+        self._is_loading = True
+        logger.debug("Showing loading indicator in faculty table")
+
+        # Clear table first
+        self.faculty_table.setRowCount(0)
+
+        # Add loading row
+        self.faculty_table.insertRow(0)
+
+        # Create loading message
+        loading_item = QTableWidgetItem("Loading faculty data...")
+        loading_item.setTextAlignment(Qt.AlignCenter)
+        loading_item.setFlags(Qt.ItemIsEnabled)  # Make it non-selectable
+
+        # Style the loading message
+        from PyQt5.QtGui import QFont, QColor
+        font = QFont()
+        font.setItalic(True)
+        font.setPointSize(12)
+        loading_item.setFont(font)
+        loading_item.setForeground(QColor("#3498db"))
+
+        # Set the item and span all columns
+        self.faculty_table.setItem(0, 0, loading_item)
+        self.faculty_table.setSpan(0, 0, 1, 7)
+
+    def _hide_loading_indicator(self):
+        """
+        Hide the loading indicator.
+        """
+        if not self._is_loading:
+            return
+
+        logger.debug("Hiding loading indicator")
+        self._is_loading = False
+        # The table will be populated with actual data after this
+
+    def _show_error_in_table(self, error_message):
+        """
+        Show an error message in the faculty table.
+
+        Args:
+            error_message (str): Error message to display
+        """
+        logger.info(f"Showing error in faculty table: {error_message}")
+
+        # Clear table first
+        self.faculty_table.setRowCount(0)
+
+        # Add error row
+        self.faculty_table.insertRow(0)
+
+        # Create error message
+        error_item = QTableWidgetItem(f"⚠️ {error_message}")
+        error_item.setTextAlignment(Qt.AlignCenter)
+        error_item.setFlags(Qt.ItemIsEnabled)  # Make it non-selectable
+
+        # Style the error message
+        from PyQt5.QtGui import QFont, QColor
+        font = QFont()
+        font.setBold(True)
+        font.setPointSize(12)
+        error_item.setFont(font)
+        error_item.setForeground(QColor("#e74c3c"))
+
+        # Set the item and span all columns
+        self.faculty_table.setItem(0, 0, error_item)
+        self.faculty_table.setSpan(0, 0, 1, 7)
+
+    def handle_faculty_updated(self):
+        """
+        Handle faculty data updated event from main application.
+        This ensures real-time synchronization between admin and student dashboards.
+        """
+        logger.info("Admin dashboard received faculty update notification")
+        try:
+            # Force immediate refresh of faculty data
+            self.refresh_data()
+            logger.debug("Admin dashboard faculty data refreshed successfully")
+        except Exception as e:
+            logger.error(f"Error handling faculty update in admin dashboard: {e}")
 
     def add_faculty(self):
         """
         Show dialog to add a new faculty member.
         """
-        dialog = FacultyDialog()
+        dialog = FacultyDialog(parent=self)
+
+        # Ensure dialog appears on top
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
         if dialog.exec_() == QDialog.Accepted:
             try:
-                name = dialog.name_input.text().strip()
-                department = dialog.department_input.text().strip()
-                email = dialog.email_input.text().strip()
-                ble_id = dialog.ble_id_input.text().strip()
+                # Sanitize inputs
+                name = sanitize_string(dialog.name_input.text(), max_length=100)
+                department = sanitize_string(dialog.department_input.text(), max_length=100)
+                email = sanitize_email(dialog.email_input.text())
+                ble_id = sanitize_string(dialog.ble_id_input.text(), max_length=50)
                 image_path = dialog.image_path
+
+                # Validate inputs
+                if not name:
+                    raise ValueError("Faculty name cannot be empty")
+
+                if not department:
+                    raise ValueError("Department cannot be empty")
+
+                if not email:
+                    raise ValueError("Email is required and must be valid")
+
+                # Validate name and email using Faculty model validation
+                if not Faculty.validate_name(name):
+                    raise ValueError("Invalid faculty name format")
+
+                if not Faculty.validate_email(email):
+                    raise ValueError("Invalid email format")
+
+                if ble_id and not Faculty.validate_ble_id(ble_id):
+                    raise ValueError("Invalid BLE ID format")
 
                 # Process image if provided
                 if image_path:
@@ -255,9 +676,13 @@ class FacultyManagementTab(QWidget):
                     if not os.path.exists(images_dir):
                         os.makedirs(images_dir)
 
-                    # Generate a unique filename
-                    filename = f"{email.split('@')[0]}_{os.path.basename(image_path)}"
-                    dest_path = os.path.join(images_dir, filename)
+                    # Sanitize and generate a unique filename
+                    safe_email_prefix = sanitize_filename(email.split('@')[0])
+                    safe_basename = sanitize_filename(os.path.basename(image_path))
+                    filename = f"{safe_email_prefix}_{safe_basename}"
+
+                    # Ensure the destination path is safe
+                    dest_path = sanitize_path(os.path.join(images_dir, filename), base_dir)
 
                     # Copy the image file
                     shutil.copy2(image_path, dest_path)
@@ -268,18 +693,28 @@ class FacultyManagementTab(QWidget):
                     image_path = None
 
                 # Get always available flag
-                always_available = dialog.always_available_checkbox.isChecked()
+                always_available = sanitize_boolean(dialog.always_available_checkbox.isChecked())
 
                 # Add faculty using controller
-                faculty = self.faculty_controller.add_faculty(name, department, email, ble_id, image_path, always_available)
+                faculty, errors = self.faculty_controller.add_faculty(name, department, email, ble_id, image_path, always_available)
 
-                if faculty:
+                if faculty and not errors:
                     QMessageBox.information(self, "Add Faculty", f"Faculty '{name}' added successfully.")
+                    # Force immediate refresh to show changes
+                    self._last_data_hash = None  # Force refresh
                     self.refresh_data()
                     self.faculty_updated.emit()
                 else:
-                    QMessageBox.warning(self, "Add Faculty", "Failed to add faculty. This email or BLE ID may already be in use.")
+                    error_msg = "Failed to add faculty."
+                    if errors:
+                        error_msg += f" Errors: {'; '.join(errors)}"
+                    else:
+                        error_msg += " This email or BLE ID may already be in use."
+                    QMessageBox.warning(self, "Add Faculty", error_msg)
 
+            except ValueError as e:
+                logger.error(f"Validation error adding faculty: {str(e)}")
+                QMessageBox.warning(self, "Input Error", str(e))
             except Exception as e:
                 logger.error(f"Error adding faculty: {str(e)}")
                 QMessageBox.warning(self, "Add Faculty", f"Error adding faculty: {str(e)}")
@@ -304,8 +739,8 @@ class FacultyManagementTab(QWidget):
             QMessageBox.warning(self, "Edit Faculty", f"Faculty with ID {faculty_id} not found.")
             return
 
-        # Create and populate dialog
-        dialog = FacultyDialog(faculty_id=faculty_id)
+        # Create and populate dialog with this tab as parent
+        dialog = FacultyDialog(faculty_id=faculty_id, parent=self)
         dialog.name_input.setText(faculty.name)
         dialog.department_input.setText(faculty.department)
         dialog.email_input.setText(faculty.email)
@@ -316,6 +751,11 @@ class FacultyManagementTab(QWidget):
         if faculty.image_path:
             dialog.image_path = faculty.get_image_path()
             dialog.image_path_input.setText(faculty.image_path)
+
+        # Ensure dialog appears on top
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
         if dialog.exec_() == QDialog.Accepted:
             try:
@@ -360,6 +800,8 @@ class FacultyManagementTab(QWidget):
 
                 if updated_faculty:
                     QMessageBox.information(self, "Edit Faculty", f"Faculty '{name}' updated successfully.")
+                    # Force immediate refresh to show changes
+                    self._last_data_hash = None  # Force refresh
                     self.refresh_data()
                     self.faculty_updated.emit()
                 else:
@@ -400,6 +842,8 @@ class FacultyManagementTab(QWidget):
 
                 if success:
                     QMessageBox.information(self, "Delete Faculty", f"Faculty '{faculty_name}' deleted successfully.")
+                    # Force immediate refresh to show changes
+                    self._last_data_hash = None  # Force refresh
                     self.refresh_data()
                     self.faculty_updated.emit()
                 else:
@@ -409,6 +853,958 @@ class FacultyManagementTab(QWidget):
                 logger.error(f"Error deleting faculty: {str(e)}")
                 QMessageBox.warning(self, "Delete Faculty", f"Error deleting faculty: {str(e)}")
 
+    def open_beacon_management(self):
+        """
+        Open the beacon management dialog.
+        """
+        try:
+            dialog = BeaconManagementDialog(parent=self)
+            dialog.exec_()
+            # Refresh data after beacon management in case BLE IDs were updated
+            self.refresh_data()
+            self.faculty_updated.emit()
+        except Exception as e:
+            logger.error(f"Error opening beacon management: {str(e)}")
+            QMessageBox.critical(self, "Beacon Management Error", f"Error opening beacon management: {str(e)}")
+
+class BeaconManagementDialog(QDialog):
+    """
+    Dialog for managing nRF51822 beacon configuration and faculty assignments.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.faculty_controller = FacultyController()
+        self.beacon_config = {}
+        self.setWindowTitle("nRF51822 Beacon Management")
+        self.setModal(True)
+        self.resize(800, 600)
+        self.init_ui()
+        self.load_faculty_data()
+
+    def init_ui(self):
+        """Initialize the UI components."""
+        layout = QVBoxLayout(self)
+
+        # Title and description
+        title_label = QLabel("nRF51822 Beacon Management")
+        title_label.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(title_label)
+
+        description_label = QLabel(
+            "Configure nRF51822 BLE beacons for faculty presence detection. "
+            "Each beacon should be assigned to a specific faculty member."
+        )
+        description_label.setWordWrap(True)
+        description_label.setStyleSheet("margin-bottom: 15px; color: #666;")
+        layout.addWidget(description_label)
+
+        # Create tab widget for different beacon management functions
+        self.tab_widget = QTabWidget()
+
+        # Beacon Discovery Tab
+        self.discovery_tab = BeaconDiscoveryTab(self)
+        self.tab_widget.addTab(self.discovery_tab, "Beacon Discovery")
+
+        # Faculty Assignment Tab
+        self.assignment_tab = BeaconAssignmentTab(self)
+        self.tab_widget.addTab(self.assignment_tab, "Faculty Assignment")
+
+        # ESP32 Configuration Tab
+        self.config_tab = ESP32ConfigurationTab(self)
+        self.tab_widget.addTab(self.config_tab, "ESP32 Configuration")
+
+        # Testing Tab
+        self.testing_tab = BeaconTestingTab(self)
+        self.tab_widget.addTab(self.testing_tab, "Testing & Monitoring")
+
+        layout.addWidget(self.tab_widget)
+
+        # Close button
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        button_layout.addWidget(close_button)
+
+        layout.addLayout(button_layout)
+
+    def load_faculty_data(self):
+        """Load faculty data for beacon assignment."""
+        try:
+            faculty_list = self.faculty_controller.get_all_faculty()
+            # Pass faculty data to tabs that need it
+            self.assignment_tab.set_faculty_data(faculty_list)
+            self.config_tab.set_faculty_data(faculty_list)
+        except Exception as e:
+            logger.error(f"Error loading faculty data: {str(e)}")
+            QMessageBox.warning(self, "Data Error", f"Failed to load faculty data: {str(e)}")
+
+class BeaconDiscoveryTab(QWidget):
+    """Tab for discovering nRF51822 beacon MAC addresses."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.discovered_beacons = {}
+        self.init_ui()
+
+    def init_ui(self):
+        """Initialize the UI components."""
+        layout = QVBoxLayout(self)
+
+        # Instructions
+        instructions = QLabel(
+            "Follow these steps to discover your nRF51822 beacon MAC addresses:\n\n"
+            "1. Power on ONE beacon at a time\n"
+            "2. Use a BLE scanner app (nRF Connect, BLE Scanner, LightBlue)\n"
+            "3. Find your beacon in the scanner (may appear as 'nRF51822' or custom name)\n"
+            "4. Record the MAC address below\n"
+            "5. Repeat for all 5 beacons"
+        )
+        instructions.setWordWrap(True)
+        instructions.setStyleSheet("background-color: #f0f8ff; padding: 10px; border: 1px solid #ccc; border-radius: 5px;")
+        layout.addWidget(instructions)
+
+        # Beacon entry section
+        beacon_group = QGroupBox("Discovered Beacons")
+        beacon_layout = QVBoxLayout()
+
+        # Create 5 beacon entry rows
+        self.beacon_entries = []
+        for i in range(5):
+            beacon_row = QHBoxLayout()
+
+            label = QLabel(f"Beacon #{i+1}:")
+            label.setMinimumWidth(80)
+            beacon_row.addWidget(label)
+
+            mac_input = QLineEdit()
+            mac_input.setPlaceholderText("XX:XX:XX:XX:XX:XX")
+            mac_input.textChanged.connect(lambda text, idx=i: self.validate_mac_input(text, idx))
+            beacon_row.addWidget(mac_input)
+
+            status_label = QLabel("Not configured")
+            status_label.setStyleSheet("color: #666;")
+            status_label.setMinimumWidth(100)
+            beacon_row.addWidget(status_label)
+
+            self.beacon_entries.append({
+                'mac_input': mac_input,
+                'status_label': status_label
+            })
+
+            beacon_layout.addLayout(beacon_row)
+
+        beacon_group.setLayout(beacon_layout)
+        layout.addWidget(beacon_group)
+
+        # Action buttons
+        button_layout = QHBoxLayout()
+
+        validate_button = QPushButton("Validate All MAC Addresses")
+        validate_button.clicked.connect(self.validate_all_macs)
+        button_layout.addWidget(validate_button)
+
+        save_button = QPushButton("Save Configuration")
+        save_button.clicked.connect(self.save_beacon_config)
+        button_layout.addWidget(save_button)
+
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+
+        # Status area
+        self.status_text = QTextEdit()
+        self.status_text.setMaximumHeight(100)
+        self.status_text.setReadOnly(True)
+        self.status_text.setPlaceholderText("Status messages will appear here...")
+        layout.addWidget(self.status_text)
+
+    def validate_mac_input(self, text, index):
+        """Validate MAC address input in real-time."""
+        import re
+        mac_pattern = r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$'
+
+        entry = self.beacon_entries[index]
+        if text and re.match(mac_pattern, text):
+            entry['status_label'].setText("Valid")
+            entry['status_label'].setStyleSheet("color: green;")
+            entry['mac_input'].setStyleSheet("border: 2px solid green;")
+        elif text:
+            entry['status_label'].setText("Invalid format")
+            entry['status_label'].setStyleSheet("color: red;")
+            entry['mac_input'].setStyleSheet("border: 2px solid red;")
+        else:
+            entry['status_label'].setText("Not configured")
+            entry['status_label'].setStyleSheet("color: #666;")
+            entry['mac_input'].setStyleSheet("")
+
+    def validate_all_macs(self):
+        """Validate all MAC addresses and check for duplicates."""
+        mac_addresses = []
+        valid_count = 0
+
+        for i, entry in enumerate(self.beacon_entries):
+            mac = entry['mac_input'].text().strip().upper()
+            if mac:
+                if self.is_valid_mac(mac):
+                    if mac in mac_addresses:
+                        entry['status_label'].setText("Duplicate!")
+                        entry['status_label'].setStyleSheet("color: red;")
+                        entry['mac_input'].setStyleSheet("border: 2px solid red;")
+                    else:
+                        mac_addresses.append(mac)
+                        valid_count += 1
+                        entry['status_label'].setText("Valid")
+                        entry['status_label'].setStyleSheet("color: green;")
+                        entry['mac_input'].setStyleSheet("border: 2px solid green;")
+                else:
+                    entry['status_label'].setText("Invalid format")
+                    entry['status_label'].setStyleSheet("color: red;")
+                    entry['mac_input'].setStyleSheet("border: 2px solid red;")
+
+        self.log_status(f"Validation complete: {valid_count} valid MAC addresses found")
+        if valid_count == 5:
+            self.log_status("✓ All 5 beacons configured with valid MAC addresses!")
+        elif valid_count > 0:
+            self.log_status(f"⚠ {5 - valid_count} beacons still need configuration")
+
+    def is_valid_mac(self, mac):
+        """Check if MAC address format is valid."""
+        import re
+        pattern = r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$'
+        return bool(re.match(pattern, mac))
+
+    def save_beacon_config(self):
+        """Save the beacon configuration."""
+        try:
+            config = {}
+            valid_beacons = 0
+
+            for i, entry in enumerate(self.beacon_entries):
+                mac = entry['mac_input'].text().strip().upper()
+                if mac and self.is_valid_mac(mac):
+                    config[f'beacon_{i+1}'] = {
+                        'mac_address': mac,
+                        'beacon_number': i + 1
+                    }
+                    valid_beacons += 1
+
+            if valid_beacons == 0:
+                QMessageBox.warning(self, "Save Error", "No valid beacon MAC addresses to save.")
+                return
+
+            # Save to parent dialog
+            if hasattr(self.parent(), 'beacon_config'):
+                self.parent().beacon_config = config
+                self.log_status(f"✓ Saved configuration for {valid_beacons} beacons")
+                QMessageBox.information(self, "Configuration Saved",
+                                      f"Successfully saved configuration for {valid_beacons} beacons.")
+
+        except Exception as e:
+            logger.error(f"Error saving beacon configuration: {str(e)}")
+            QMessageBox.critical(self, "Save Error", f"Error saving configuration: {str(e)}")
+
+    def log_status(self, message):
+        """Add a status message to the status text area."""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.status_text.append(f"[{timestamp}] {message}")
+
+class BeaconAssignmentTab(QWidget):
+    """Tab for assigning beacons to faculty members."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.faculty_data = []
+        self.init_ui()
+
+    def init_ui(self):
+        """Initialize the UI components."""
+        layout = QVBoxLayout(self)
+
+        # Instructions
+        instructions = QLabel(
+            "Assign discovered beacons to faculty members. Each beacon should be assigned to exactly one faculty member."
+        )
+        instructions.setWordWrap(True)
+        instructions.setStyleSheet("background-color: #f0f8ff; padding: 10px; border: 1px solid #ccc; border-radius: 5px;")
+        layout.addWidget(instructions)
+
+        # Assignment table
+        self.assignment_table = QTableWidget()
+        self.assignment_table.setColumnCount(4)
+        self.assignment_table.setHorizontalHeaderLabels(["Beacon #", "MAC Address", "Faculty Member", "Action"])
+        self.assignment_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(self.assignment_table)
+
+        # Action buttons
+        button_layout = QHBoxLayout()
+
+        refresh_button = QPushButton("Refresh Beacon Data")
+        refresh_button.clicked.connect(self.refresh_beacon_data)
+        button_layout.addWidget(refresh_button)
+
+        assign_button = QPushButton("Auto-Assign to Faculty")
+        assign_button.clicked.connect(self.auto_assign_faculty)
+        button_layout.addWidget(assign_button)
+
+        save_button = QPushButton("Save Assignments")
+        save_button.clicked.connect(self.save_assignments)
+        button_layout.addWidget(save_button)
+
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+
+    def set_faculty_data(self, faculty_list):
+        """Set the faculty data for assignment."""
+        self.faculty_data = faculty_list
+        self.refresh_assignment_table()
+
+    def refresh_beacon_data(self):
+        """Refresh beacon data from discovery tab."""
+        if hasattr(self.parent(), 'beacon_config'):
+            self.refresh_assignment_table()
+        else:
+            QMessageBox.information(self, "No Beacon Data",
+                                  "Please discover beacon MAC addresses first in the Beacon Discovery tab.")
+
+    def refresh_assignment_table(self):
+        """Refresh the assignment table with current data."""
+        self.assignment_table.setRowCount(0)
+
+        if not hasattr(self.parent(), 'beacon_config'):
+            return
+
+        beacon_config = self.parent().beacon_config
+
+        for beacon_key, beacon_info in beacon_config.items():
+            row = self.assignment_table.rowCount()
+            self.assignment_table.insertRow(row)
+
+            # Beacon number
+            self.assignment_table.setItem(row, 0, QTableWidgetItem(str(beacon_info['beacon_number'])))
+
+            # MAC address
+            self.assignment_table.setItem(row, 1, QTableWidgetItem(beacon_info['mac_address']))
+
+            # Faculty dropdown
+            faculty_combo = QComboBox()
+            faculty_combo.addItem("-- Select Faculty --", None)
+            for faculty in self.faculty_data:
+                faculty_combo.addItem(f"{faculty.name} (ID: {faculty.id})", faculty.id)
+
+            self.assignment_table.setCellWidget(row, 2, faculty_combo)
+
+            # Action button
+            assign_button = QPushButton("Assign")
+            assign_button.clicked.connect(lambda checked, r=row: self.assign_beacon_to_faculty(r))
+            self.assignment_table.setCellWidget(row, 3, assign_button)
+
+    def auto_assign_faculty(self):
+        """Automatically assign beacons to faculty in order."""
+        if not self.faculty_data:
+            QMessageBox.warning(self, "No Faculty Data", "No faculty members available for assignment.")
+            return
+
+        for row in range(self.assignment_table.rowCount()):
+            if row < len(self.faculty_data):
+                faculty_combo = self.assignment_table.cellWidget(row, 2)
+                if faculty_combo:
+                    # Set to faculty member (index 1 because index 0 is "-- Select Faculty --")
+                    faculty_combo.setCurrentIndex(row + 1)
+
+        QMessageBox.information(self, "Auto-Assignment",
+                              f"Automatically assigned {min(self.assignment_table.rowCount(), len(self.faculty_data))} beacons to faculty members.")
+
+    def assign_beacon_to_faculty(self, row):
+        """Assign a specific beacon to the selected faculty member."""
+        faculty_combo = self.assignment_table.cellWidget(row, 2)
+        if not faculty_combo or faculty_combo.currentData() is None:
+            QMessageBox.warning(self, "Assignment Error", "Please select a faculty member first.")
+            return
+
+        faculty_id = faculty_combo.currentData()
+        mac_address = self.assignment_table.item(row, 1).text()
+
+        # Update faculty BLE ID in database
+        try:
+            from ..controllers.faculty_controller import FacultyController
+            faculty_controller = FacultyController()
+
+            # Get faculty object
+            faculty = faculty_controller.get_faculty_by_id(faculty_id)
+            if faculty:
+                # Update BLE ID
+                success = faculty_controller.update_faculty_ble_id(faculty_id, mac_address)
+                if success:
+                    QMessageBox.information(self, "Assignment Success",
+                                          f"Successfully assigned beacon {mac_address} to {faculty.name}")
+                else:
+                    QMessageBox.warning(self, "Assignment Error", "Failed to update faculty BLE ID in database.")
+            else:
+                QMessageBox.warning(self, "Assignment Error", f"Faculty with ID {faculty_id} not found.")
+
+        except Exception as e:
+            logger.error(f"Error assigning beacon to faculty: {str(e)}")
+            QMessageBox.critical(self, "Assignment Error", f"Error assigning beacon: {str(e)}")
+
+    def save_assignments(self):
+        """Save all beacon assignments to the database."""
+        try:
+            assignments_made = 0
+            errors = []
+
+            from ..controllers.faculty_controller import FacultyController
+            faculty_controller = FacultyController()
+
+            for row in range(self.assignment_table.rowCount()):
+                faculty_combo = self.assignment_table.cellWidget(row, 2)
+                if faculty_combo and faculty_combo.currentData() is not None:
+                    faculty_id = faculty_combo.currentData()
+                    mac_address = self.assignment_table.item(row, 1).text()
+
+                    try:
+                        success = faculty_controller.update_faculty_ble_id(faculty_id, mac_address)
+                        if success:
+                            assignments_made += 1
+                        else:
+                            errors.append(f"Failed to assign beacon {mac_address}")
+                    except Exception as e:
+                        errors.append(f"Error assigning beacon {mac_address}: {str(e)}")
+
+            if assignments_made > 0:
+                QMessageBox.information(self, "Assignments Saved",
+                                      f"Successfully saved {assignments_made} beacon assignments.")
+
+            if errors:
+                error_msg = "\n".join(errors)
+                QMessageBox.warning(self, "Assignment Errors", f"Some assignments failed:\n{error_msg}")
+
+        except Exception as e:
+            logger.error(f"Error saving beacon assignments: {str(e)}")
+            QMessageBox.critical(self, "Save Error", f"Error saving assignments: {str(e)}")
+
+class ESP32ConfigurationTab(QWidget):
+    """Tab for generating ESP32 configuration files."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.faculty_data = []
+        self.init_ui()
+
+    def init_ui(self):
+        """Initialize the UI components."""
+        layout = QVBoxLayout(self)
+
+        # Instructions
+        instructions = QLabel(
+            "Generate ESP32 configuration files for each faculty desk unit. "
+            "Each unit will be configured with the appropriate faculty ID and all beacon MAC addresses."
+        )
+        instructions.setWordWrap(True)
+        instructions.setStyleSheet("background-color: #f0f8ff; padding: 10px; border: 1px solid #ccc; border-radius: 5px;")
+        layout.addWidget(instructions)
+
+        # Configuration preview
+        config_group = QGroupBox("Configuration Preview")
+        config_layout = QVBoxLayout()
+
+        self.config_text = QTextEdit()
+        self.config_text.setReadOnly(True)
+        self.config_text.setMaximumHeight(300)
+        self.config_text.setPlaceholderText("Configuration preview will appear here...")
+        config_layout.addWidget(self.config_text)
+
+        config_group.setLayout(config_layout)
+        layout.addWidget(config_group)
+
+        # Action buttons
+        button_layout = QHBoxLayout()
+
+        generate_button = QPushButton("Generate All Configurations")
+        generate_button.clicked.connect(self.generate_all_configs)
+        button_layout.addWidget(generate_button)
+
+        preview_button = QPushButton("Preview Configuration")
+        preview_button.clicked.connect(self.preview_configuration)
+        button_layout.addWidget(preview_button)
+
+        export_button = QPushButton("Export to Files")
+        export_button.clicked.connect(self.export_configurations)
+        button_layout.addWidget(export_button)
+
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+
+        # Status area
+        self.status_text = QTextEdit()
+        self.status_text.setMaximumHeight(100)
+        self.status_text.setReadOnly(True)
+        self.status_text.setPlaceholderText("Status messages will appear here...")
+        layout.addWidget(self.status_text)
+
+    def set_faculty_data(self, faculty_list):
+        """Set the faculty data for configuration generation."""
+        self.faculty_data = faculty_list
+
+    def generate_all_configs(self):
+        """Generate configurations for all faculty desk units."""
+        if not self.faculty_data:
+            QMessageBox.warning(self, "No Faculty Data", "No faculty members available for configuration generation.")
+            return
+
+        if not hasattr(self.parent(), 'beacon_config') or not self.parent().beacon_config:
+            QMessageBox.warning(self, "No Beacon Data", "Please configure beacon MAC addresses first.")
+            return
+
+        try:
+            beacon_config = self.parent().beacon_config
+            configurations = {}
+
+            for i, faculty in enumerate(self.faculty_data[:5]):  # Limit to 5 units
+                config = self.generate_faculty_config(faculty, beacon_config, i + 1)
+                configurations[f"unit_{i+1}_{faculty.name.replace(' ', '_')}"] = config
+
+            self.log_status(f"Generated configurations for {len(configurations)} faculty desk units")
+
+            # Store configurations in parent for export
+            if hasattr(self.parent(), 'esp32_configurations'):
+                self.parent().esp32_configurations = configurations
+            else:
+                setattr(self.parent(), 'esp32_configurations', configurations)
+
+            QMessageBox.information(self, "Configuration Generated",
+                                  f"Successfully generated configurations for {len(configurations)} ESP32 units.")
+
+        except Exception as e:
+            logger.error(f"Error generating configurations: {str(e)}")
+            QMessageBox.critical(self, "Generation Error", f"Error generating configurations: {str(e)}")
+
+    def generate_faculty_config(self, faculty, beacon_config, unit_number):
+        """Generate configuration for a specific faculty member."""
+        from datetime import datetime
+
+        # Create MAC addresses array
+        mac_addresses = []
+        for beacon_info in beacon_config.values():
+            mac_addresses.append(beacon_info['mac_address'])
+
+        # Pad with empty strings if less than 5 beacons
+        while len(mac_addresses) < 5:
+            mac_addresses.append("")
+
+        config_content = f'''/**
+ * ConsultEase - Faculty Desk Unit Configuration
+ * Generated for: {faculty.name} (Unit #{unit_number})
+ * Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+ *
+ * This file contains configuration settings for Faculty Desk Unit #{unit_number}.
+ * This unit is assigned to {faculty.name} in {faculty.department}.
+ */
+
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// WiFi Configuration
+#define WIFI_SSID "ConsultEase"
+#define WIFI_PASSWORD "Admin123"
+
+// MQTT Configuration
+#define MQTT_SERVER "172.20.10.8"  // Update with your MQTT broker IP
+#define MQTT_PORT 1883
+#define MQTT_USERNAME ""  // Leave empty if not using authentication
+#define MQTT_PASSWORD ""  // Leave empty if not using authentication
+
+// Faculty Configuration - Unit #{unit_number}
+#define FACULTY_ID {faculty.id}  // This should match the faculty ID in the database
+#define FACULTY_NAME "{faculty.name}"  // This should match the faculty name in the database
+#define FACULTY_DEPARTMENT "{faculty.department}"  // This should match the faculty department in the database
+
+// BLE Configuration - MAC Address Detection for nRF51822 Beacons
+#define BLE_SCAN_INTERVAL 3000  // Scan interval in milliseconds (optimized for nRF51822)
+#define BLE_SCAN_DURATION 5     // Scan duration in seconds (longer for better beacon detection)
+#define BLE_RSSI_THRESHOLD -85  // RSSI threshold for presence detection (adjusted for beacon range)
+
+// Faculty MAC Addresses - nRF51822 BLE Beacon MAC addresses
+// Format: "XX:XX:XX:XX:XX:XX" (case insensitive)
+// All units scan for all beacons, but only report status for their assigned faculty
+#define MAX_FACULTY_MAC_ADDRESSES 5
+extern const char* FACULTY_MAC_ADDRESSES[MAX_FACULTY_MAC_ADDRESSES];
+
+// MAC Address Detection Settings - Optimized for nRF51822 Beacons
+#define MAC_DETECTION_TIMEOUT 45000    // Time in ms to consider faculty absent (increased for beacon reliability)
+#define MAC_SCAN_ACTIVE true           // Use active scanning (better for beacon detection)
+#define MAC_DETECTION_DEBOUNCE 2       // Number of consecutive scans needed (reduced for faster response)
+
+// Display Configuration
+#define TFT_ROTATION 1  // 0=Portrait, 1=Landscape, 2=Inverted Portrait, 3=Inverted Landscape
+
+// Color Scheme - National University Philippines
+#define NU_BLUE      0x0015      // Dark blue (navy) - Primary color
+#define NU_GOLD      0xFE60      // Gold/Yellow - Secondary color
+#define NU_DARKBLUE  0x000B      // Darker blue for contrasts
+#define NU_LIGHTGOLD 0xF710      // Lighter gold for highlights
+#define TFT_WHITE    0xFFFF      // White for text
+#define TFT_BLACK    0x0000      // Black for backgrounds
+
+// UI Colors
+#define TFT_BG       NU_BLUE         // Background color
+#define TFT_TEXT     TFT_WHITE       // Text color
+#define TFT_HEADER   NU_DARKBLUE     // Header color
+#define TFT_ACCENT   NU_GOLD         // Accent color
+#define TFT_HIGHLIGHT NU_LIGHTGOLD   // Highlight color
+
+// MQTT Topics - Standardized format
+#define MQTT_TOPIC_STATUS "consultease/faculty/%d/status"  // %d will be replaced with FACULTY_ID
+#define MQTT_TOPIC_MAC_STATUS "consultease/faculty/%d/mac_status"  // %d will be replaced with FACULTY_ID
+#define MQTT_TOPIC_REQUESTS "consultease/faculty/%d/requests"  // %d will be replaced with FACULTY_ID
+#define MQTT_TOPIC_MESSAGES "consultease/faculty/%d/messages"  // %d will be replaced with FACULTY_ID
+#define MQTT_TOPIC_NOTIFICATIONS "consultease/system/notifications"
+
+// Legacy MQTT Topics - For backward compatibility
+#define MQTT_LEGACY_STATUS "professor/status"
+#define MQTT_LEGACY_MESSAGES "professor/messages"
+
+// Debug Configuration
+#define DEBUG_ENABLED true  // Set to false to disable debug output
+
+#endif // CONFIG_H
+
+// MAC Addresses Array (add this to faculty_desk_unit.ino):
+// Faculty MAC Addresses Definition - nRF51822 BLE Beacons
+const char* FACULTY_MAC_ADDRESSES[MAX_FACULTY_MAC_ADDRESSES] = {{
+'''
+
+        for i, mac in enumerate(mac_addresses):
+            if mac:
+                config_content += f'  "{mac}"'
+            else:
+                config_content += f'  ""'
+
+            if i < len(mac_addresses) - 1:
+                config_content += ','
+
+            if mac:
+                # Find which beacon this is
+                beacon_num = i + 1
+                config_content += f'  // Beacon #{beacon_num}'
+            else:
+                config_content += f'  // Empty slot'
+
+            config_content += '\n'
+
+        config_content += '};\n'
+
+        return config_content
+
+    def preview_configuration(self):
+        """Preview the configuration for the first faculty member."""
+        if not self.faculty_data:
+            QMessageBox.warning(self, "No Faculty Data", "No faculty members available for preview.")
+            return
+
+        if not hasattr(self.parent(), 'beacon_config') or not self.parent().beacon_config:
+            QMessageBox.warning(self, "No Beacon Data", "Please configure beacon MAC addresses first.")
+            return
+
+        try:
+            faculty = self.faculty_data[0]
+            beacon_config = self.parent().beacon_config
+            config = self.generate_faculty_config(faculty, beacon_config, 1)
+
+            self.config_text.setPlainText(config)
+            self.log_status(f"Previewing configuration for {faculty.name}")
+
+        except Exception as e:
+            logger.error(f"Error previewing configuration: {str(e)}")
+            QMessageBox.critical(self, "Preview Error", f"Error previewing configuration: {str(e)}")
+
+    def export_configurations(self):
+        """Export all configurations to files."""
+        if not hasattr(self.parent(), 'esp32_configurations'):
+            QMessageBox.warning(self, "No Configurations", "Please generate configurations first.")
+            return
+
+        try:
+            # Ask user for export directory
+            from PyQt5.QtWidgets import QFileDialog
+            export_dir = QFileDialog.getExistingDirectory(self, "Select Export Directory")
+
+            if not export_dir:
+                return
+
+            configurations = self.parent().esp32_configurations
+            exported_count = 0
+
+            for unit_name, config_content in configurations.items():
+                file_path = os.path.join(export_dir, f"{unit_name}_config.h")
+
+                with open(file_path, 'w') as f:
+                    f.write(config_content)
+
+                exported_count += 1
+                self.log_status(f"Exported configuration for {unit_name}")
+
+            QMessageBox.information(self, "Export Complete",
+                                  f"Successfully exported {exported_count} configuration files to:\n{export_dir}")
+
+        except Exception as e:
+            logger.error(f"Error exporting configurations: {str(e)}")
+            QMessageBox.critical(self, "Export Error", f"Error exporting configurations: {str(e)}")
+
+    def log_status(self, message):
+        """Add a status message to the status text area."""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.status_text.append(f"[{timestamp}] {message}")
+
+class BeaconTestingTab(QWidget):
+    """Tab for testing beacon integration and monitoring."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.monitoring = False
+        self.mqtt_client = None
+        self.init_ui()
+
+    def init_ui(self):
+        """Initialize the UI components."""
+        layout = QVBoxLayout(self)
+
+        # Instructions
+        instructions = QLabel(
+            "Test the beacon integration and monitor real-time beacon detection. "
+            "Use these tools to verify that your ESP32 units are properly detecting beacons."
+        )
+        instructions.setWordWrap(True)
+        instructions.setStyleSheet("background-color: #f0f8ff; padding: 10px; border: 1px solid #ccc; border-radius: 5px;")
+        layout.addWidget(instructions)
+
+        # Testing controls
+        test_group = QGroupBox("Testing Controls")
+        test_layout = QVBoxLayout()
+
+        # MQTT connection test
+        mqtt_layout = QHBoxLayout()
+        mqtt_layout.addWidget(QLabel("MQTT Broker:"))
+
+        self.mqtt_host_input = QLineEdit("172.20.10.8")
+        mqtt_layout.addWidget(self.mqtt_host_input)
+
+        self.mqtt_port_input = QLineEdit("1883")
+        self.mqtt_port_input.setMaximumWidth(80)
+        mqtt_layout.addWidget(self.mqtt_port_input)
+
+        test_mqtt_button = QPushButton("Test MQTT Connection")
+        test_mqtt_button.clicked.connect(self.test_mqtt_connection)
+        mqtt_layout.addWidget(test_mqtt_button)
+
+        test_layout.addLayout(mqtt_layout)
+
+        # Monitoring controls
+        monitor_layout = QHBoxLayout()
+
+        self.monitor_button = QPushButton("Start Monitoring")
+        self.monitor_button.clicked.connect(self.toggle_monitoring)
+        monitor_layout.addWidget(self.monitor_button)
+
+        clear_button = QPushButton("Clear Log")
+        clear_button.clicked.connect(self.clear_log)
+        monitor_layout.addWidget(clear_button)
+
+        monitor_layout.addStretch()
+        test_layout.addLayout(monitor_layout)
+
+        test_group.setLayout(test_layout)
+        layout.addWidget(test_group)
+
+        # Monitoring log
+        log_group = QGroupBox("Real-time Monitoring Log")
+        log_layout = QVBoxLayout()
+
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setPlaceholderText("Monitoring messages will appear here...")
+        log_layout.addWidget(self.log_text)
+
+        log_group.setLayout(log_layout)
+        layout.addWidget(log_group)
+
+    def test_mqtt_connection(self):
+        """Test MQTT broker connection."""
+        try:
+            import paho.mqtt.client as mqtt
+
+            host = self.mqtt_host_input.text().strip()
+            port = int(self.mqtt_port_input.text().strip())
+
+            if not host:
+                QMessageBox.warning(self, "Input Error", "Please enter MQTT broker host.")
+                return
+
+            # Create test client
+            test_client = mqtt.Client()
+
+            def on_connect(client, userdata, flags, rc):
+                if rc == 0:
+                    self.log_message("✓ MQTT connection successful")
+                    QMessageBox.information(self, "Connection Test", "Successfully connected to MQTT broker!")
+                    client.disconnect()
+                else:
+                    self.log_message(f"✗ MQTT connection failed (code {rc})")
+                    QMessageBox.warning(self, "Connection Test", f"Failed to connect to MQTT broker (code {rc})")
+
+            def on_disconnect(client, userdata, rc):
+                self.log_message("MQTT disconnected")
+
+            test_client.on_connect = on_connect
+            test_client.on_disconnect = on_disconnect
+
+            self.log_message(f"Testing MQTT connection to {host}:{port}...")
+            test_client.connect(host, port, 60)
+            test_client.loop_start()
+
+            # Stop the loop after a short time
+            QTimer.singleShot(3000, lambda: test_client.loop_stop())
+
+        except ValueError:
+            QMessageBox.warning(self, "Input Error", "Please enter a valid port number.")
+        except Exception as e:
+            logger.error(f"Error testing MQTT connection: {str(e)}")
+            QMessageBox.critical(self, "Connection Error", f"Error testing MQTT connection: {str(e)}")
+
+    def toggle_monitoring(self):
+        """Start or stop monitoring beacon detection."""
+        if not self.monitoring:
+            self.start_monitoring()
+        else:
+            self.stop_monitoring()
+
+    def start_monitoring(self):
+        """Start monitoring beacon detection messages."""
+        try:
+            import paho.mqtt.client as mqtt
+
+            host = self.mqtt_host_input.text().strip()
+            port = int(self.mqtt_port_input.text().strip())
+
+            if not host:
+                QMessageBox.warning(self, "Input Error", "Please enter MQTT broker host.")
+                return
+
+            self.mqtt_client = mqtt.Client()
+            self.mqtt_client.on_connect = self.on_mqtt_connect
+            self.mqtt_client.on_message = self.on_mqtt_message
+            self.mqtt_client.on_disconnect = self.on_mqtt_disconnect
+
+            self.log_message(f"Connecting to MQTT broker at {host}:{port}...")
+            self.mqtt_client.connect(host, port, 60)
+            self.mqtt_client.loop_start()
+
+            self.monitoring = True
+            self.monitor_button.setText("Stop Monitoring")
+            self.monitor_button.setStyleSheet("background-color: #f44336; color: white;")
+
+        except ValueError:
+            QMessageBox.warning(self, "Input Error", "Please enter a valid port number.")
+        except Exception as e:
+            logger.error(f"Error starting monitoring: {str(e)}")
+            QMessageBox.critical(self, "Monitoring Error", f"Error starting monitoring: {str(e)}")
+
+    def stop_monitoring(self):
+        """Stop monitoring beacon detection messages."""
+        if self.mqtt_client:
+            self.mqtt_client.loop_stop()
+            self.mqtt_client.disconnect()
+            self.mqtt_client = None
+
+        self.monitoring = False
+        self.monitor_button.setText("Start Monitoring")
+        self.monitor_button.setStyleSheet("")
+        self.log_message("Monitoring stopped")
+
+    def on_mqtt_connect(self, client, userdata, flags, rc):
+        """MQTT connection callback."""
+        if rc == 0:
+            self.log_message("✓ Connected to MQTT broker")
+
+            # Subscribe to relevant topics
+            topics = [
+                "consultease/faculty/+/status",
+                "consultease/faculty/+/mac_status",
+                "consultease/faculty/+/requests",
+                "professor/status",
+                "professor/messages"
+            ]
+
+            for topic in topics:
+                client.subscribe(topic)
+                self.log_message(f"Subscribed to {topic}")
+
+        else:
+            self.log_message(f"✗ Failed to connect to MQTT broker (code {rc})")
+
+    def on_mqtt_message(self, client, userdata, msg):
+        """MQTT message callback."""
+        try:
+            topic = msg.topic
+            payload = msg.payload.decode()
+
+            # Format message for display
+            if topic.endswith("/mac_status"):
+                # Parse JSON payload for MAC status
+                try:
+                    import json
+                    data = json.loads(payload)
+                    status = data.get("status", "unknown")
+                    mac = data.get("mac", "unknown")
+                    faculty_id = topic.split("/")[2]
+
+                    if status == "faculty_present":
+                        self.log_message(f"🟢 Faculty {faculty_id} PRESENT (Beacon: {mac})", "green")
+                    elif status == "faculty_absent":
+                        self.log_message(f"🔴 Faculty {faculty_id} ABSENT (Beacon: {mac})", "red")
+                    else:
+                        self.log_message(f"📡 Faculty {faculty_id}: {status} (Beacon: {mac})")
+
+                except json.JSONDecodeError:
+                    self.log_message(f"📡 {topic}: {payload}")
+            else:
+                # Regular message
+                if payload in ["keychain_connected", "faculty_present"]:
+                    self.log_message(f"🟢 {topic}: {payload}", "green")
+                elif payload in ["keychain_disconnected", "faculty_absent"]:
+                    self.log_message(f"🔴 {topic}: {payload}", "red")
+                else:
+                    self.log_message(f"📡 {topic}: {payload}")
+
+        except Exception as e:
+            self.log_message(f"Error processing message: {str(e)}", "red")
+
+    def on_mqtt_disconnect(self, client, userdata, rc):
+        """MQTT disconnect callback."""
+        self.log_message("Disconnected from MQTT broker")
+
+    def clear_log(self):
+        """Clear the monitoring log."""
+        self.log_text.clear()
+        self.log_message("Log cleared")
+
+    def log_message(self, message, color=None):
+        """Add a message to the monitoring log."""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S")
+
+        if color:
+            formatted_message = f'<span style="color: {color};">[{timestamp}] {message}</span>'
+            self.log_text.append(formatted_message)
+        else:
+            self.log_text.append(f"[{timestamp}] {message}")
+
+        # Auto-scroll to bottom
+        scrollbar = self.log_text.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
 class FacultyDialog(QDialog):
     """
     Dialog for adding or editing faculty members.
@@ -417,6 +1813,11 @@ class FacultyDialog(QDialog):
         super().__init__(parent)
         self.faculty_id = faculty_id
         self.image_path = None
+
+        # Set window flags to ensure dialog stays on top and has proper modal behavior
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        self.setWindowModality(Qt.ApplicationModal)
+
         self.init_ui()
 
     def init_ui(self):
@@ -551,8 +1952,11 @@ class StudentManagementTab(QWidget):
         """
         Initialize the UI components.
         """
+        # Create a container widget for the scroll area
+        container = QWidget()
+
         # Main layout
-        main_layout = QVBoxLayout()
+        main_layout = QVBoxLayout(container)
 
         # Buttons for actions
         button_layout = QHBoxLayout()
@@ -594,8 +1998,50 @@ class StudentManagementTab(QWidget):
 
         main_layout.addWidget(self.student_table)
 
-        # Set the layout
-        self.setLayout(main_layout)
+        # Add some spacing at the bottom for better appearance
+        main_layout.addSpacing(10)
+
+        # Create a scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(container)
+
+        # Only show scrollbars when needed
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        # Style the scroll area to match the application theme
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #f0f0f0;
+                width: 12px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #c0c0c0;
+                min-height: 20px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #a0a0a0;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+        """)
+
+        # Create a layout for the tab and add the scroll area
+        tab_layout = QVBoxLayout(self)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.addWidget(scroll_area)
 
         # Initial data load
         self.refresh_data()
@@ -653,7 +2099,14 @@ class StudentManagementTab(QWidget):
         # Import all necessary modules at the top level
         import traceback
 
-        dialog = StudentDialog()
+        # Create dialog with this tab as the parent
+        dialog = StudentDialog(parent=self)
+
+        # Ensure dialog appears on top
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
         if dialog.exec_() == QDialog.Accepted:
             try:
                 name = dialog.name_input.text().strip()
@@ -762,12 +2215,17 @@ class StudentManagementTab(QWidget):
                 QMessageBox.warning(self, "Edit Student", f"Student with ID {student_id} not found.")
                 return
 
-            # Create and populate dialog
-            dialog = StudentDialog(student_id=student_id)
+            # Create and populate dialog with this tab as the parent
+            dialog = StudentDialog(student_id=student_id, parent=self)
             dialog.name_input.setText(student.name)
             dialog.department_input.setText(student.department)
             dialog.rfid_input.setText(student.rfid_uid)
             dialog.rfid_uid = student.rfid_uid
+
+            # Ensure dialog appears on top
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
 
             if dialog.exec_() == QDialog.Accepted:
                 name = dialog.name_input.text().strip()
@@ -954,8 +2412,13 @@ class StudentManagementTab(QWidget):
         """
         Scan RFID card for student registration.
         """
-        dialog = RFIDScanDialog(self.rfid_service)
+        dialog = RFIDScanDialog(self.rfid_service, parent=self)
         self.scan_dialog = dialog
+
+        # Ensure dialog appears on top
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
         if dialog.exec_() == QDialog.Accepted:
             rfid_uid = dialog.get_rfid_uid()
@@ -989,10 +2452,15 @@ class StudentManagementTab(QWidget):
                         )
 
                         if reply == QMessageBox.Yes:
-                            # Pre-fill the RFID field in the student dialog
-                            dialog = StudentDialog()
+                            # Pre-fill the RFID field in the student dialog with this as parent
+                            dialog = StudentDialog(parent=self)
                             dialog.rfid_uid = rfid_uid
                             dialog.rfid_input.setText(rfid_uid)
+
+                            # Ensure dialog appears on top
+                            dialog.show()
+                            dialog.raise_()
+                            dialog.activateWindow()
 
                             if dialog.exec_() == QDialog.Accepted:
                                 try:
@@ -1017,10 +2485,15 @@ class StudentDialog(QDialog):
     Dialog for adding or editing students.
     """
     def __init__(self, student_id=None, parent=None):
+        # Ensure parent is properly set
         super().__init__(parent)
         self.student_id = student_id
         self.rfid_uid = ""
         self.rfid_service = get_rfid_service()
+
+        # Set window flags to ensure dialog stays on top and has proper modal behavior
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        self.setWindowModality(Qt.ApplicationModal)
 
         # Track if we're currently scanning
         self.is_scanning = False
@@ -1106,8 +2579,13 @@ class StudentDialog(QDialog):
             self.rfid_service.register_callback(self.scan_callback)
             self.is_scanning = True
 
-            # Create and show the dialog
-            self.rfid_scan_dialog = RFIDScanDialog(self.rfid_service)
+            # Create and show the dialog with this dialog as parent
+            self.rfid_scan_dialog = RFIDScanDialog(self.rfid_service, parent=self)
+
+            # Ensure dialog appears on top
+            self.rfid_scan_dialog.show()
+            self.rfid_scan_dialog.raise_()
+            self.rfid_scan_dialog.activateWindow()
 
             # Wait for the dialog to complete
             result = self.rfid_scan_dialog.exec_()
@@ -1171,9 +2649,14 @@ class RFIDScanDialog(QDialog):
     Dialog for RFID card scanning.
     """
     def __init__(self, rfid_service=None, parent=None):
+        # Ensure parent is properly set
         super().__init__(parent)
         self.rfid_uid = ""
         self.rfid_service = rfid_service or get_rfid_service()
+
+        # Set window flags to ensure dialog stays on top and has proper modal behavior
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        self.setWindowModality(Qt.ApplicationModal)
 
         # Track whether we've received a scan
         self.scan_received = False
@@ -1389,14 +2872,20 @@ class SystemMaintenanceTab(QWidget):
     """
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.consultation_controller = None
+        self.admin_controller = None
         self.init_ui()
+        self.load_faculty_list()
 
     def init_ui(self):
         """
         Initialize the UI components.
         """
+        # Create a container widget for the scroll area
+        container = QWidget()
+
         # Main layout
-        main_layout = QVBoxLayout()
+        main_layout = QVBoxLayout(container)
 
         # Database section
         database_group = QGroupBox("Database Maintenance")
@@ -1414,6 +2903,53 @@ class SystemMaintenanceTab(QWidget):
         database_group.setLayout(database_layout)
         main_layout.addWidget(database_group)
 
+        # Admin Account Management section
+        admin_group = QGroupBox("Admin Account Management")
+        admin_layout = QVBoxLayout()
+
+        # Change Username section
+        username_form = QFormLayout()
+        self.current_password_username = QLineEdit()
+        self.current_password_username.setEchoMode(QLineEdit.Password)
+        username_form.addRow("Current Password:", self.current_password_username)
+
+        self.new_username_input = QLineEdit()
+        username_form.addRow("New Username:", self.new_username_input)
+
+        change_username_button = QPushButton("Change Username")
+        change_username_button.clicked.connect(self.change_admin_username)
+        username_form.addRow("", change_username_button)
+
+        admin_layout.addLayout(username_form)
+
+        # Add a separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        admin_layout.addWidget(separator)
+
+        # Change Password section
+        password_form = QFormLayout()
+        self.current_password_input = QLineEdit()
+        self.current_password_input.setEchoMode(QLineEdit.Password)
+        password_form.addRow("Current Password:", self.current_password_input)
+
+        self.new_password_input = QLineEdit()
+        self.new_password_input.setEchoMode(QLineEdit.Password)
+        password_form.addRow("New Password:", self.new_password_input)
+
+        self.confirm_password_input = QLineEdit()
+        self.confirm_password_input.setEchoMode(QLineEdit.Password)
+        password_form.addRow("Confirm Password:", self.confirm_password_input)
+
+        change_password_button = QPushButton("Change Password")
+        change_password_button.clicked.connect(self.open_password_change_dialog)
+        password_form.addRow("", change_password_button)
+
+        admin_layout.addLayout(password_form)
+        admin_group.setLayout(admin_layout)
+        main_layout.addWidget(admin_group)
+
         # System logs section
         logs_group = QGroupBox("System Logs")
         logs_layout = QVBoxLayout()
@@ -1424,6 +2960,57 @@ class SystemMaintenanceTab(QWidget):
 
         logs_group.setLayout(logs_layout)
         main_layout.addWidget(logs_group)
+
+        # Faculty Desk Unit section
+        faculty_desk_group = QGroupBox("Faculty Desk Unit")
+        faculty_desk_layout = QVBoxLayout()
+
+        # Add a dropdown to select faculty
+        faculty_layout = QHBoxLayout()
+        faculty_label = QLabel("Select Faculty:")
+        self.faculty_combo = QComboBox()
+        self.faculty_combo.setMinimumWidth(200)
+        faculty_layout.addWidget(faculty_label)
+        faculty_layout.addWidget(self.faculty_combo)
+        faculty_desk_layout.addLayout(faculty_layout)
+
+        # Add a button to test the connection
+        test_connection_button = QPushButton("Test Faculty Desk Connection")
+        test_connection_button.clicked.connect(self.test_faculty_desk_connection)
+        faculty_desk_layout.addWidget(test_connection_button)
+
+        faculty_desk_group.setLayout(faculty_desk_layout)
+        main_layout.addWidget(faculty_desk_group)
+
+        # Beacon Management section
+        beacon_group = QGroupBox("nRF51822 Beacon Management")
+        beacon_layout = QVBoxLayout()
+
+        # Quick access to beacon management
+        beacon_info_label = QLabel(
+            "Manage nRF51822 BLE beacons for faculty presence detection. "
+            "Configure beacon MAC addresses and assign them to faculty members."
+        )
+        beacon_info_label.setWordWrap(True)
+        beacon_info_label.setStyleSheet("margin-bottom: 10px; color: #666;")
+        beacon_layout.addWidget(beacon_info_label)
+
+        beacon_button_layout = QHBoxLayout()
+
+        open_beacon_mgmt_button = QPushButton("Open Beacon Management")
+        open_beacon_mgmt_button.setStyleSheet("background-color: #2196F3; color: white;")
+        open_beacon_mgmt_button.clicked.connect(self.open_beacon_management_from_system)
+        beacon_button_layout.addWidget(open_beacon_mgmt_button)
+
+        test_beacon_button = QPushButton("Test Beacon Detection")
+        test_beacon_button.clicked.connect(self.test_beacon_detection)
+        beacon_button_layout.addWidget(test_beacon_button)
+
+        beacon_button_layout.addStretch()
+        beacon_layout.addLayout(beacon_button_layout)
+
+        beacon_group.setLayout(beacon_layout)
+        main_layout.addWidget(beacon_group)
 
         # System settings section
         settings_group = QGroupBox("System Settings")
@@ -1449,8 +3036,50 @@ class SystemMaintenanceTab(QWidget):
         settings_group.setLayout(settings_layout)
         main_layout.addWidget(settings_group)
 
-        # Set the layout
-        self.setLayout(main_layout)
+        # Add some spacing at the bottom for better appearance
+        main_layout.addSpacing(20)
+
+        # Create a scroll area for the system maintenance tab
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(container)
+
+        # Only show scrollbars when needed
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        # Style the scroll area to match the application theme
+        scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #f0f0f0;
+                width: 12px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #c0c0c0;
+                min-height: 20px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #a0a0a0;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+        """)
+
+        # Create a layout for the tab and add the scroll area
+        tab_layout = QVBoxLayout(self)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.addWidget(scroll_area)
 
     def backup_database(self):
         """
@@ -1669,6 +3298,269 @@ class SystemMaintenanceTab(QWidget):
         log_dialog = LogViewerDialog(self)
         log_dialog.exec_()
 
+    def load_faculty_list(self):
+        """
+        Load the list of faculty members into the dropdown.
+        """
+        try:
+            # Import the faculty controller
+            from ..controllers import FacultyController
+            faculty_controller = FacultyController()
+
+            # Get all faculty members
+            faculties = faculty_controller.get_all_faculty()
+
+            # Clear the dropdown
+            self.faculty_combo.clear()
+
+            # Add faculty members to the dropdown
+            for faculty in faculties:
+                self.faculty_combo.addItem(f"{faculty.name} (ID: {faculty.id})", faculty.id)
+
+            logger.info(f"Loaded {len(faculties)} faculty members into dropdown")
+        except Exception as e:
+            logger.error(f"Error loading faculty list: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to load faculty list: {str(e)}")
+
+    def test_faculty_desk_connection(self):
+        """
+        Test the connection to the selected faculty desk unit.
+        """
+        try:
+            # Get the selected faculty ID
+            if self.faculty_combo.count() == 0:
+                QMessageBox.warning(self, "Test Connection", "No faculty members available. Please add faculty members first.")
+                return
+
+            faculty_id = self.faculty_combo.currentData()
+            faculty_name = self.faculty_combo.currentText().split(" (ID:")[0]
+
+            if not faculty_id:
+                QMessageBox.warning(self, "Test Connection", "Please select a faculty member.")
+                return
+
+            # Import the consultation controller if not already imported
+            if not self.consultation_controller:
+                from ..controllers import ConsultationController
+                self.consultation_controller = ConsultationController()
+
+            # Show a progress dialog
+            progress_dialog = QMessageBox(self)
+            progress_dialog.setWindowTitle("Testing Connection")
+            progress_dialog.setText(f"Sending test message to faculty desk unit for {faculty_name}...\nPlease check the faculty desk unit display.")
+            progress_dialog.setStandardButtons(QMessageBox.NoButton)
+            progress_dialog.show()
+            QApplication.processEvents()
+
+            # Send a test message
+            success = self.consultation_controller.test_faculty_desk_connection(faculty_id)
+
+            # Close the progress dialog
+            progress_dialog.close()
+
+            if success:
+                QMessageBox.information(self, "Test Connection",
+                    f"Test message sent successfully to faculty desk unit for {faculty_name}.\n\n"
+                    f"If the faculty desk unit did not receive the message, please check:\n"
+                    f"1. The faculty desk unit is powered on and connected to WiFi\n"
+                    f"2. The MQTT broker is running and accessible\n"
+                    f"3. The faculty ID in the faculty desk unit matches the faculty ID in the database\n"
+                    f"4. The MQTT topics are correctly configured")
+            else:
+                QMessageBox.warning(self, "Test Connection",
+                    f"Failed to send test message to faculty desk unit for {faculty_name}.\n\n"
+                    f"Please check:\n"
+                    f"1. The MQTT broker is running and accessible\n"
+                    f"2. The MQTT broker host and port are correctly configured\n"
+                    f"3. The network connection is working")
+
+        except Exception as e:
+            logger.error(f"Error testing faculty desk connection: {str(e)}")
+            QMessageBox.critical(self, "Test Connection", f"Error testing faculty desk connection: {str(e)}")
+
+    def change_admin_username(self):
+        """
+        Change the admin username.
+        """
+        try:
+            # Get the current admin info from the parent window
+            parent_window = self.window()
+            if not hasattr(parent_window, 'admin') or not parent_window.admin:
+                QMessageBox.warning(self, "Admin Error", "No admin user is currently logged in.")
+                return
+
+            # Get admin ID
+            admin_id = parent_window.admin.get('id') if isinstance(parent_window.admin, dict) else parent_window.admin.id
+
+            # Get input values
+            current_password = self.current_password_username.text()
+            new_username = self.new_username_input.text().strip()
+
+            # Validate inputs
+            if not current_password:
+                QMessageBox.warning(self, "Validation Error", "Please enter your current password.")
+                return
+
+            if not new_username:
+                QMessageBox.warning(self, "Validation Error", "Please enter a new username.")
+                return
+
+            # Initialize admin controller if needed
+            if not self.admin_controller:
+                from ..controllers import AdminController
+                self.admin_controller = AdminController()
+
+            # Change username
+            success = self.admin_controller.change_username(admin_id, current_password, new_username)
+
+            if success:
+                # Update the admin info in the parent window
+                if isinstance(parent_window.admin, dict):
+                    parent_window.admin['username'] = new_username
+                else:
+                    parent_window.admin.username = new_username
+
+                # Update the header label in the parent window
+                for child in parent_window.findChildren(QLabel):
+                    if "Logged in as:" in child.text():
+                        child.setText(f"Admin Dashboard - Logged in as: {new_username}")
+                        break
+
+                QMessageBox.information(self, "Username Changed", "Your username has been changed successfully.")
+
+                # Clear the input fields
+                self.current_password_username.clear()
+                self.new_username_input.clear()
+            else:
+                QMessageBox.warning(self, "Username Change Failed", "Failed to change username. Please check your password and try again.")
+
+        except Exception as e:
+            logger.error(f"Error changing admin username: {str(e)}")
+            QMessageBox.critical(self, "Username Change Error", f"Error changing username: {str(e)}")
+
+    def change_admin_password(self):
+        """
+        Change the admin password.
+        """
+        try:
+            # Get the current admin info from the parent window
+            parent_window = self.window()
+            if not hasattr(parent_window, 'admin') or not parent_window.admin:
+                QMessageBox.warning(self, "Admin Error", "No admin user is currently logged in.")
+                return
+
+            # Get admin ID
+            admin_id = parent_window.admin.get('id') if isinstance(parent_window.admin, dict) else parent_window.admin.id
+
+            # Get input values
+            current_password = self.current_password_input.text()
+            new_password = self.new_password_input.text()
+            confirm_password = self.confirm_password_input.text()
+
+            # Validate inputs
+            if not current_password:
+                QMessageBox.warning(self, "Validation Error", "Please enter your current password.")
+                return
+
+            if not new_password:
+                QMessageBox.warning(self, "Validation Error", "Please enter a new password.")
+                return
+
+            if new_password != confirm_password:
+                QMessageBox.warning(self, "Validation Error", "New password and confirmation do not match.")
+                return
+
+            # Initialize admin controller if needed
+            if not self.admin_controller:
+                from ..controllers import AdminController
+                self.admin_controller = AdminController()
+
+            # Change password
+            success = self.admin_controller.change_password(admin_id, current_password, new_password)
+
+            if success:
+                QMessageBox.information(self, "Password Changed", "Your password has been changed successfully.")
+
+                # Clear the input fields
+                self.current_password_input.clear()
+                self.new_password_input.clear()
+                self.confirm_password_input.clear()
+            else:
+                QMessageBox.warning(self, "Password Change Failed", "Failed to change password. Please check your current password and try again.")
+
+        except ValueError as e:
+            # This will catch password validation errors from the Admin model
+            logger.error(f"Password validation error: {str(e)}")
+            QMessageBox.warning(self, "Password Validation Error", str(e))
+        except Exception as e:
+            logger.error(f"Error changing admin password: {str(e)}")
+            QMessageBox.critical(self, "Password Change Error", f"Error changing password: {str(e)}")
+
+    def open_password_change_dialog(self):
+        """
+        Open the enhanced password change dialog.
+        """
+        try:
+            # Get the current admin info from the parent window
+            parent_window = self.window()
+            if not hasattr(parent_window, 'admin') or not parent_window.admin:
+                QMessageBox.warning(self, "Admin Error", "No admin user is currently logged in.")
+                return
+
+            # Import the password change dialog
+            from .password_change_dialog import PasswordChangeDialog
+
+            # Create admin info dictionary
+            if isinstance(parent_window.admin, dict):
+                admin_info = parent_window.admin
+            else:
+                admin_info = {
+                    'id': parent_window.admin.id,
+                    'username': parent_window.admin.username
+                }
+
+            # Create and show the dialog
+            dialog = PasswordChangeDialog(admin_info, forced_change=False, parent=self)
+
+            def on_password_changed(success):
+                if success:
+                    # Clear the old password input fields
+                    self.current_password_input.clear()
+                    self.new_password_input.clear()
+                    self.confirm_password_input.clear()
+                    logger.info(f"Password changed successfully for admin: {admin_info['username']}")
+
+            dialog.password_changed.connect(on_password_changed)
+            dialog.exec_()
+
+        except Exception as e:
+            logger.error(f"Error opening password change dialog: {str(e)}")
+            QMessageBox.critical(self, "Error", f"An error occurred while opening the password change dialog: {str(e)}")
+
+    def open_beacon_management_from_system(self):
+        """
+        Open beacon management dialog from system maintenance tab.
+        """
+        try:
+            dialog = BeaconManagementDialog(parent=self)
+            dialog.exec_()
+        except Exception as e:
+            logger.error(f"Error opening beacon management: {str(e)}")
+            QMessageBox.critical(self, "Beacon Management Error", f"Error opening beacon management: {str(e)}")
+
+    def test_beacon_detection(self):
+        """
+        Test beacon detection by opening the testing tab directly.
+        """
+        try:
+            dialog = BeaconManagementDialog(parent=self)
+            # Switch to testing tab
+            dialog.tab_widget.setCurrentIndex(3)  # Testing tab is index 3
+            dialog.exec_()
+        except Exception as e:
+            logger.error(f"Error opening beacon testing: {str(e)}")
+            QMessageBox.critical(self, "Beacon Testing Error", f"Error opening beacon testing: {str(e)}")
+
     def save_settings(self):
         """
         Save system settings.
@@ -1703,6 +3595,9 @@ class SystemMaintenanceTab(QWidget):
             os.environ['MQTT_BROKER_PORT'] = mqtt_port
 
             QMessageBox.information(self, "Save Settings", "Settings saved successfully.\nSome settings may require an application restart to take effect.")
+
+            # Reload the faculty list after settings change
+            self.load_faculty_list()
 
         except Exception as e:
             logger.error(f"Error saving settings: {str(e)}")

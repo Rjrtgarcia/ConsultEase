@@ -1,10 +1,12 @@
 import logging
 import datetime
-from ..services import get_mqtt_service
 from ..models import Consultation, ConsultationStatus, get_db
+from ..utils.mqtt_utils import publish_consultation_request, publish_mqtt_message
+from ..utils.mqtt_topics import MQTTTopics
+from ..utils.cache_manager import invalidate_consultation_cache
+from ..services.consultation_queue_service import get_consultation_queue_service, MessagePriority
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class ConsultationController:
@@ -16,18 +18,17 @@ class ConsultationController:
         """
         Initialize the consultation controller.
         """
-        self.mqtt_service = get_mqtt_service()
         self.callbacks = []
+        self.queue_service = get_consultation_queue_service()
 
     def start(self):
         """
         Start the consultation controller.
         """
         logger.info("Starting Consultation controller")
-
-        # Connect MQTT service
-        if not self.mqtt_service.is_connected:
-            self.mqtt_service.connect()
+        # Start the consultation queue service
+        self.queue_service.start()
+        # Async MQTT service is managed globally, no need to connect here
 
     def stop(self):
         """
@@ -72,6 +73,8 @@ class ConsultationController:
             Consultation: New consultation object or None if error
         """
         try:
+            logger.info(f"Creating new consultation request (Student: {student_id}, Faculty: {faculty_id})")
+
             db = get_db()
 
             # Create new consultation
@@ -89,8 +92,21 @@ class ConsultationController:
 
             logger.info(f"Created consultation request: {consultation.id} (Student: {student_id}, Faculty: {faculty_id})")
 
-            # Publish to MQTT
-            self._publish_consultation(consultation)
+            # Publish consultation using the optimized method with offline queuing
+            publish_success = self._publish_consultation(consultation)
+
+            if publish_success:
+                logger.info(f"Successfully published consultation request {consultation.id} to faculty desk unit")
+            else:
+                # Try to queue the consultation for offline faculty
+                queue_success = self.queue_service.queue_consultation_request(consultation, MessagePriority.NORMAL)
+                if queue_success:
+                    logger.info(f"Queued consultation request {consultation.id} for offline faculty {faculty_id}")
+                else:
+                    logger.error(f"Failed to publish or queue consultation request {consultation.id}")
+
+            # Invalidate consultation cache for the student
+            invalidate_consultation_cache(student_id)
 
             # Notify callbacks
             self._notify_callbacks(consultation)
@@ -102,56 +118,73 @@ class ConsultationController:
 
     def _publish_consultation(self, consultation):
         """
-        Publish consultation to MQTT.
+        Publish consultation to MQTT using async service.
 
         Args:
             consultation (Consultation): Consultation object to publish
         """
         try:
-            # Get full consultation data with related objects
-            db = get_db()
-            db.refresh(consultation)
+            # Get a new database session and fetch the consultation with all related objects
+            db = get_db(force_new=True)
 
-            # Create payload
-            payload = {
+            # Instead of refreshing, query for the consultation by ID to ensure it's attached to this session
+            consultation_id = consultation.id
+            consultation = db.query(Consultation).filter(Consultation.id == consultation_id).first()
+
+            if not consultation:
+                logger.error(f"Consultation with ID {consultation_id} not found in database")
+                return False
+
+            # Explicitly load the related objects to avoid lazy loading issues
+            student = consultation.student
+            faculty = consultation.faculty
+
+            if not student:
+                logger.error(f"Student not found for consultation {consultation_id}")
+                return False
+
+            if not faculty:
+                logger.error(f"Faculty not found for consultation {consultation_id}")
+                return False
+
+            # Prepare consultation data for async publishing
+            consultation_data = {
                 'id': consultation.id,
-                'student_id': consultation.student_id,
-                'student_name': consultation.student.name,
-                'student_department': consultation.student.department,
-                'faculty_id': consultation.faculty_id,
-                'faculty_name': consultation.faculty.name,
+                'student_id': student.id,
+                'student_name': student.name,
+                'student_department': student.department,
+                'faculty_id': faculty.id,
+                'faculty_name': faculty.name,
                 'request_message': consultation.request_message,
                 'course_code': consultation.course_code,
                 'status': consultation.status.value,
                 'requested_at': consultation.requested_at.isoformat() if consultation.requested_at else None
             }
 
-            # Publish to faculty-specific topic
-            topic = f"consultease/faculty/{consultation.faculty_id}/requests"
+            logger.info(f"Publishing consultation request {consultation.id} for faculty {faculty.id} using async MQTT")
 
-            # The MQTT service will format the message for the faculty desk unit
-            success = self.mqtt_service.publish(topic, payload)
+            # Use the async MQTT utility function
+            success = publish_consultation_request(consultation_data)
 
-            if success:
-                logger.info(f"Published consultation request to {topic}")
-            else:
-                logger.error(f"Failed to publish consultation request to {topic}")
-
-            # Also publish to the professor/messages topic for the faculty desk unit
-            # This is the topic used in the faculty desk unit code
-            alt_topic = "professor/messages"
-
-            # Format the message for the faculty desk unit display
-            message = f"Student: {consultation.student.name}\n"
+            # Also publish to legacy topic for backward compatibility
+            message = f"Student: {student.name}\n"
             if consultation.course_code:
                 message += f"Course: {consultation.course_code}\n"
             message += f"Request: {consultation.request_message}"
 
-            # Publish the message directly (not as JSON) to match the faculty desk unit code
-            self.mqtt_service.publish_raw(alt_topic, message)
-            logger.info(f"Published consultation request to faculty desk unit topic {alt_topic}")
+            legacy_topic = MQTTTopics.LEGACY_FACULTY_MESSAGES
+            legacy_success = publish_mqtt_message(legacy_topic, message, qos=2)
 
-            return True
+            # Close the database session
+            db.close()
+
+            overall_success = success or legacy_success
+            if overall_success:
+                logger.info(f"Successfully published consultation request {consultation.id} using async MQTT")
+            else:
+                logger.error(f"Failed to publish consultation request {consultation.id} using async MQTT")
+
+            return overall_success
         except Exception as e:
             logger.error(f"Error publishing consultation: {str(e)}")
             return False
@@ -267,3 +300,60 @@ class ConsultationController:
         except Exception as e:
             logger.error(f"Error getting consultation by ID: {str(e)}")
             return None
+
+    def test_faculty_desk_connection(self, faculty_id):
+        """
+        Test the connection to a faculty desk unit by sending a test message.
+
+        Args:
+            faculty_id (int): Faculty ID to test
+
+        Returns:
+            bool: True if the test message was sent successfully, False otherwise
+        """
+        try:
+            # Get faculty information
+            db = get_db()
+            from ..models import Faculty
+            faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
+
+            if not faculty:
+                logger.error(f"Faculty not found: {faculty_id}")
+                return False
+
+            # Create a test message
+            message = f"Test message from ConsultEase central system.\nTimestamp: {datetime.datetime.now().isoformat()}"
+
+            # Publish to faculty-specific topic using standardized format
+            faculty_requests_topic = MQTTTopics.get_faculty_requests_topic(faculty_id)
+            payload = {
+                'id': 0,
+                'student_id': 0,
+                'student_name': "System Test",
+                'student_department': "System",
+                'faculty_id': faculty_id,
+                'faculty_name': faculty.name,
+                'request_message': message,
+                'course_code': "TEST",
+                'status': "test",
+                'requested_at': datetime.datetime.now().isoformat(),
+                'message': message
+            }
+
+            # Publish using async MQTT service
+            success_json = publish_mqtt_message(faculty_requests_topic, payload)
+
+            # Publish to legacy plain text topic for backward compatibility
+            success_text = publish_mqtt_message(MQTTTopics.LEGACY_FACULTY_MESSAGES, message, qos=2)
+
+            # Publish to faculty-specific plain text topic
+            faculty_messages_topic = MQTTTopics.get_faculty_messages_topic(faculty_id)
+            success_faculty = publish_mqtt_message(faculty_messages_topic, message, qos=2)
+
+            logger.info(f"Test message sent to faculty desk unit {faculty_id} ({faculty.name}) using async MQTT")
+            logger.info(f"JSON topic success: {success_json}, Text topic success: {success_text}, Faculty topic success: {success_faculty}")
+
+            return success_json or success_text or success_faculty
+        except Exception as e:
+            logger.error(f"Error testing faculty desk connection: {str(e)}")
+            return False

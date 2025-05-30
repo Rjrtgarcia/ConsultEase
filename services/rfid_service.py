@@ -364,9 +364,7 @@ class RFIDService(QObject):
 
             except Exception as e:
                 logger.error(f"Error opening RFID device {self.device_path}: {str(e)}")
-                logger.info("Falling back to simulation mode")
-                self.simulation_mode = True
-                self._simulate_rfid_reading()
+                self._handle_device_failure("Failed to open RFID device", e)
                 return
 
             # Mapping from key codes to characters (extend to support more characters)
@@ -446,26 +444,13 @@ class RFIDService(QObject):
 
                 except OSError as e:
                     logger.error(f"Device read error (device may have been disconnected): {str(e)}")
-                    # Try to reopen the device
-                    try:
-                        # First try to ungrab if we had grabbed it
-                        try:
-                            device.ungrab()
-                        except:
-                            pass
-
-                        device = evdev.InputDevice(self.device_path)
-                        logger.info(f"Reconnected to RFID device: {device.name}")
-
-                        # Try to grab it again
-                        try:
-                            device.grab()
-                            logger.info("Regained exclusive access to RFID reader")
-                        except:
-                            pass
-                    except Exception as e2:
-                        logger.error(f"Failed to reopen device: {str(e2)}")
-                        time.sleep(5)  # Wait before trying again
+                    # Try to reconnect with retry mechanism
+                    if self._attempt_device_reconnection(device):
+                        continue  # Successfully reconnected, continue reading
+                    else:
+                        # Failed to reconnect, handle device failure
+                        self._handle_device_failure("RFID device disconnected and reconnection failed", e)
+                        break
 
             # Make sure to ungrab the device when we're done
             try:
@@ -476,14 +461,10 @@ class RFIDService(QObject):
 
         except ImportError:
             logger.error("evdev library not installed. Please install it with: pip install evdev")
-            logger.info("Falling back to simulation mode")
-            self.simulation_mode = True
-            self._simulate_rfid_reading()
+            self._handle_device_failure("evdev library not available", None)
         except Exception as e:
             logger.error(f"Error reading RFID: {str(e)}")
-            logger.info("Falling back to simulation mode")
-            self.simulation_mode = True
-            self._simulate_rfid_reading()
+            self._handle_device_failure("Unexpected RFID service error", e)
 
     def _simulate_rfid_reading(self):
         """
@@ -545,6 +526,140 @@ class RFIDService(QObject):
         self._notify_callbacks(rfid_uid)
 
         return rfid_uid
+
+    def _handle_device_failure(self, error_message, exception):
+        """
+        Handle RFID device failures with proper user notification and fallback.
+
+        Args:
+            error_message (str): Human-readable error message
+            exception (Exception): The exception that caused the failure (can be None)
+        """
+        logger.error(f"RFID Device Failure: {error_message}")
+        if exception:
+            logger.error(f"Exception details: {str(exception)}")
+
+        # Emit signal to notify UI components about the device failure
+        self.device_status_changed.emit("disconnected", error_message)
+
+        # Set simulation mode as fallback
+        self.simulation_mode = True
+        logger.warning("⚠️  RFID device failure - switching to simulation mode")
+        logger.info("📋 Use the 'Simulate Card Read' button in the admin interface for testing")
+
+        # Start simulation mode
+        self._simulate_rfid_reading()
+
+        # Schedule retry attempts
+        self._schedule_device_reconnection()
+
+    def _attempt_device_reconnection(self, device):
+        """
+        Attempt to reconnect to the RFID device with retry logic.
+
+        Args:
+            device: Current device object (may be invalid)
+
+        Returns:
+            bool: True if reconnection successful, False otherwise
+        """
+        max_retries = 3
+        retry_delay = 2  # seconds
+
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Attempting RFID device reconnection (attempt {attempt + 1}/{max_retries})")
+
+                # First try to ungrab if we had grabbed it
+                try:
+                    device.ungrab()
+                except:
+                    pass
+
+                # Wait before retry
+                time.sleep(retry_delay)
+
+                # Try to reopen the device
+                import evdev
+                device = evdev.InputDevice(self.device_path)
+                logger.info(f"Reconnected to RFID device: {device.name}")
+
+                # Try to grab it again
+                try:
+                    device.grab()
+                    logger.info("Regained exclusive access to RFID reader")
+                except:
+                    logger.warning("Could not regain exclusive access, but device is connected")
+
+                # Test the device with a simple operation
+                device.capabilities()  # This will raise an exception if device is not working
+
+                logger.info("✅ RFID device reconnection successful")
+                self.device_status_changed.emit("connected", "RFID device reconnected successfully")
+                return True
+
+            except Exception as e:
+                logger.warning(f"Reconnection attempt {attempt + 1} failed: {str(e)}")
+                retry_delay *= 2  # Exponential backoff
+
+        logger.error("❌ All RFID device reconnection attempts failed")
+        return False
+
+    def _schedule_device_reconnection(self):
+        """
+        Schedule periodic attempts to reconnect to the RFID device.
+        """
+        # This could be enhanced with a timer-based retry mechanism
+        # For now, we'll rely on manual retry through the UI
+        logger.info("📅 Device reconnection can be attempted manually through the admin interface")
+        logger.info("💡 Check device connection and use 'Refresh RFID Service' if available")
+
+    def retry_device_connection(self):
+        """
+        Public method to manually retry RFID device connection.
+        Can be called from UI components.
+
+        Returns:
+            bool: True if reconnection successful, False otherwise
+        """
+        if self.simulation_mode:
+            logger.info("Attempting to exit simulation mode and reconnect to RFID device...")
+
+            # Try to detect and connect to device
+            if self._detect_rfid_device():
+                self.simulation_mode = False
+                logger.info("✅ Successfully reconnected to RFID device")
+                self.device_status_changed.emit("connected", "RFID device reconnected")
+
+                # Restart the reading thread
+                if hasattr(self, 'read_thread') and self.read_thread.is_alive():
+                    self.stop()
+                    time.sleep(1)
+
+                self.start()
+                return True
+            else:
+                logger.warning("❌ Could not detect RFID device")
+                self.device_status_changed.emit("disconnected", "RFID device not detected")
+                return False
+        else:
+            logger.info("RFID service is not in simulation mode")
+            return True
+
+    def get_device_status(self):
+        """
+        Get current RFID device status.
+
+        Returns:
+            dict: Device status information
+        """
+        return {
+            'simulation_mode': self.simulation_mode,
+            'device_path': self.device_path,
+            'running': self.running,
+            'thread_alive': hasattr(self, 'read_thread') and self.read_thread.is_alive() if hasattr(self, 'read_thread') else False,
+            'status': 'simulation' if self.simulation_mode else 'connected' if self.running else 'disconnected'
+        }
 
 # Singleton instance
 rfid_service = None
