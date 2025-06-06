@@ -160,16 +160,32 @@ class FacultyController:
                 try:
                     faculty_id = int(parts[2])
                     if isinstance(data, dict):
-                        status = data.get('present') # Assuming 'present' field from log
-                        if status is None: # Fallback to 'status' field if 'present' is not there
-                           status = data.get('status')
-                        # Convert potential string "true"/"false" to boolean
-                        if isinstance(status, str):
-                            if status.lower() == 'true': status = True
-                            elif status.lower() == 'false': status = False
-                            else: logger.warning(f"Invalid status string value: {status}"); return
+                        # Improved status processing logic to handle BUSY status correctly
+                        status_str = data.get("status", "").upper()
+                        present_bool = data.get("present", None)
                         
-                        if status is None: logger.warning(f"Status not found in data: {data}"); return
+                        # Determine status based on both status string and present boolean
+                        # Priority: Use status string for semantic meaning, fall back to present boolean
+                        if status_str:
+                            if status_str in ["AVAILABLE", "PRESENT"]:
+                                status = True
+                            elif status_str in ["AWAY", "OFFLINE", "UNAVAILABLE"]:
+                                status = False
+                            elif "BUSY" in status_str:
+                                status = False  # Busy faculty are not available for new consultations
+                            else:
+                                logger.warning(f"Unknown status string: {status_str}, falling back to present field")
+                                status = bool(present_bool) if present_bool is not None else None
+                        elif present_bool is not None:
+                            # Fallback to present boolean if no status string
+                            status = bool(present_bool)
+                        else:
+                            logger.warning(f"No valid status information found in data: {data}")
+                            return
+                        
+                        if status is None:
+                            logger.warning(f"Could not determine status from data: {data}")
+                            return
 
                         # Enhanced status details (optional)
                         ntp_sync_status = data.get('ntp_sync_status')

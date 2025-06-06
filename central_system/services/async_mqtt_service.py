@@ -182,22 +182,22 @@ class AsyncMQTTService:
                 logger.error(f"Failed to decode message payload for topic {topic}")
                 return
 
-            # DEBUG: Log every message received
-            logger.info(f"🔥 MQTT MESSAGE RECEIVED - Topic: '{topic}', Data: {data}")
+            # Log only important messages to reduce performance impact on Raspberry Pi
+            logger.debug(f"MQTT message received - Topic: '{topic}', Size: {len(str(data))} chars")
 
             # Find all matching handlers
             handlers = self._find_message_handlers(topic)
             
-            # DEBUG: Log handler matching results
-            logger.info(f"🔍 Found {len(handlers)} handlers for topic '{topic}'")
+            # Log only if no handlers found or multiple handlers (potential issues)
             if len(handlers) == 0:
-                logger.warning(f"❌ NO HANDLERS found for topic '{topic}' - available patterns: {list(self.message_handlers.keys())}")
+                logger.warning(f"No handlers found for topic '{topic}' - available patterns: {list(self.message_handlers.keys())}")
+            elif len(handlers) > 1:
+                logger.info(f"Multiple handlers ({len(handlers)}) for topic '{topic}' - potential duplicate processing")
             
             if handlers:
-                logger.debug(f"Found {len(handlers)} handlers for topic {topic}")
                 for i, handler in enumerate(handlers):
                     handler_name = getattr(handler, '__name__', str(handler))
-                    logger.info(f"🎯 Executing handler {i+1}/{len(handlers)}: '{handler_name}' for topic '{topic}'")
+                    logger.debug(f"Executing handler '{handler_name}' for topic '{topic}'")
                     self.executor.submit(self._execute_handler, handler, topic, data)
             else:
                 logger.debug(f"No handlers found for topic: {topic}")
@@ -216,26 +216,16 @@ class AsyncMQTTService:
         handlers = []
         
         with self.handler_lock:
-            # DEBUG: Log what we're looking for
-            logger.debug(f"🔎 Looking for handlers for topic '{topic}'")
-            logger.debug(f"🔎 Available handler patterns: {list(self.message_handlers.keys())}")
-            
             # Exact match first
             if topic in self.message_handlers:
                 exact_handlers = self.message_handlers[topic]
                 handlers.extend(exact_handlers)
-                logger.debug(f"✅ Found {len(exact_handlers)} exact match handlers for '{topic}'")
 
             # Wildcard matching
             for pattern, pattern_handlers in self.message_handlers.items():
                 if pattern != topic and self._topic_matches(topic, pattern):
                     handlers.extend(pattern_handlers)
-                    logger.debug(f"✅ Found {len(pattern_handlers)} wildcard handlers for '{topic}' matching pattern '{pattern}'")
-                elif pattern != topic:
-                    logger.debug(f"❌ Topic '{topic}' does NOT match pattern '{pattern}'")
 
-        # DEBUG: Final results
-        logger.debug(f"🎯 Total handlers found for '{topic}': {len(handlers)}")
         return handlers
 
     def _topic_matches(self, topic: str, pattern: str) -> bool:

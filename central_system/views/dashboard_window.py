@@ -1591,16 +1591,17 @@ class DashboardWindow(BaseWindow):
             # Subscribe to faculty status updates from central system (processed updates)
             subscribe_to_topic("consultease/faculty/+/status_update", self.handle_realtime_status_update)
             
-            # Subscribe to direct ESP32 faculty status updates (raw status from devices)
-            subscribe_to_topic("consultease/faculty/+/status", self.handle_realtime_status_update)
+            # NOTE: Removed subscription to raw ESP32 messages to prevent duplicate processing
+            # The Faculty Controller handles raw ESP32 messages and publishes processed notifications
+            # Dashboard should only receive processed notifications, not raw ESP32 data
             
             # Subscribe to system notifications
             subscribe_to_topic(MQTTTopics.SYSTEM_NOTIFICATIONS, self.handle_system_notification)
             
-            logger.info("✅ Real-time faculty status updates enabled (both processed and direct)")
+            logger.info("✅ Real-time faculty status updates enabled (processed notifications only)")
             logger.info("   📡 Subscribed to: consultease/faculty/+/status_update")
-            logger.info("   📡 Subscribed to: consultease/faculty/+/status")
             logger.info("   📡 Subscribed to: consultease/system/notifications")
+            logger.info("   🚫 NOT subscribed to raw ESP32 messages (handled by Faculty Controller)")
         except Exception as e:
             logger.error(f"Failed to set up real-time updates: {e}")
 
@@ -1639,26 +1640,30 @@ class DashboardWindow(BaseWindow):
             data (dict): Status update data
         """
         try:
-            # Extract faculty ID and status with different formats
+            # Process only standardized status update notifications (not raw ESP32 messages)
             faculty_id = data.get('faculty_id')
             new_status = data.get('status')
             
-            # Handle direct ESP32 status format
-            if new_status is None and 'present' in data:
-                # ESP32 status format: {"faculty_id": 1, "present": true, "status": "AVAILABLE"}
-                new_status = data.get('present', False)
-            elif isinstance(new_status, str):
-                # Handle string status values from ESP32: "AVAILABLE", "AWAY", etc.
-                status_str = new_status.upper()
-                if status_str in ["AVAILABLE", "PRESENT"]:
-                    new_status = True
-                elif status_str in ["AWAY", "OFFLINE", "UNAVAILABLE"]:
-                    new_status = False
-                elif "BUSY" in status_str:
-                    new_status = "busy"  # Special case for busy status
-                else:
-                    logger.warning(f"Unknown status string: {new_status}")
-                    return
+            # Check if this is a properly formatted status update notification
+            if data.get('type') == 'faculty_status':
+                # This is a processed notification from Faculty Controller
+                logger.debug(f"Processing faculty status notification: Faculty {faculty_id} -> {new_status}")
+            else:
+                # Handle legacy or non-standard formats for backward compatibility
+                logger.debug(f"Processing legacy status update format: {data}")
+                
+                # Handle string status values for backward compatibility
+                if isinstance(new_status, str):
+                    status_str = new_status.upper()
+                    if status_str in ["AVAILABLE", "PRESENT"]:
+                        new_status = True
+                    elif status_str in ["AWAY", "OFFLINE", "UNAVAILABLE"]:
+                        new_status = False
+                    elif "BUSY" in status_str:
+                        new_status = "busy"
+                    else:
+                        logger.warning(f"Unknown status string: {new_status}")
+                        return
             
             if faculty_id is None or new_status is None:
                 logger.warning(f"Invalid faculty status update: {data}")
@@ -1670,7 +1675,6 @@ class DashboardWindow(BaseWindow):
             card_updated = self.update_faculty_card_status(faculty_id, new_status)
 
             # Only trigger a full refresh if the card wasn't found in the current view
-            # If the card was updated in place, no need for a full refresh
             if not card_updated:
                 logger.debug(f"Faculty card for ID {faculty_id} not visible, triggering full UI refresh.")
                 self.request_ui_refresh.emit()
