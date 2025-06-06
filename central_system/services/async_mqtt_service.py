@@ -118,16 +118,20 @@ class AsyncMQTTService:
             logger.info(f"Connected to MQTT broker at {self.broker_host}:{self.broker_port}")
 
             # Resubscribe to all topics
-            for topic in self.message_handlers.keys():
-                try:
-                    result, mid = client.subscribe(topic)
-                    if result == mqtt.MQTT_ERR_SUCCESS:
-                        self.pending_subscriptions[mid] = topic
-                        logger.debug(f"Subscription request sent for topic: {topic}, mid: {mid}")
-                    else:
-                        logger.error(f"Failed to send subscription request for topic {topic}. Paho error code: {result}")
-                except Exception as e:
-                    logger.error(f"Error resubscribing to topic {topic}: {e}")
+            logger.info(f"🔄 Resubscribing to {len(self.message_handlers)} registered topic patterns...")
+            for topic, handlers in self.message_handlers.items():
+                if handlers:  # Only subscribe if there are handlers
+                    try:
+                        result, mid = client.subscribe(topic)
+                        if result == mqtt.MQTT_ERR_SUCCESS:
+                            self.pending_subscriptions[mid] = topic
+                            logger.info(f"✅ Resubscribed to topic: '{topic}' (handlers: {len(handlers)}, mid: {mid})")
+                        else:
+                            logger.error(f"❌ Failed to resubscribe to topic '{topic}': {result}")
+                    except Exception as e:
+                        logger.error(f"❌ Error resubscribing to topic '{topic}': {e}")
+                else:
+                    logger.warning(f"⚠️ Skipping topic '{topic}' - no handlers registered")
         else:
             self.is_connected = False
             logger.error(f"Failed to connect to MQTT broker. Return code: {rc}")
@@ -178,18 +182,30 @@ class AsyncMQTTService:
                 logger.error(f"Failed to decode message payload for topic {topic}")
                 return
 
+            # DEBUG: Log every message received
+            logger.info(f"🔥 MQTT MESSAGE RECEIVED - Topic: '{topic}', Data: {data}")
+
             # Find all matching handlers
             handlers = self._find_message_handlers(topic)
+            
+            # DEBUG: Log handler matching results
+            logger.info(f"🔍 Found {len(handlers)} handlers for topic '{topic}'")
+            if len(handlers) == 0:
+                logger.warning(f"❌ NO HANDLERS found for topic '{topic}' - available patterns: {list(self.message_handlers.keys())}")
+            
             if handlers:
                 logger.debug(f"Found {len(handlers)} handlers for topic {topic}")
-                # Execute all handlers in thread pool to avoid blocking
-                for handler in handlers:
+                for i, handler in enumerate(handlers):
+                    handler_name = getattr(handler, '__name__', str(handler))
+                    logger.info(f"🎯 Executing handler {i+1}/{len(handlers)}: '{handler_name}' for topic '{topic}'")
                     self.executor.submit(self._execute_handler, handler, topic, data)
             else:
                 logger.debug(f"No handlers found for topic: {topic}")
 
         except Exception as e:
             logger.error(f"Error processing MQTT message: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
 
     def _on_publish(self, client, userdata, mid):
         """Handle successful message publication."""
@@ -200,15 +216,26 @@ class AsyncMQTTService:
         handlers = []
         
         with self.handler_lock:
+            # DEBUG: Log what we're looking for
+            logger.debug(f"🔎 Looking for handlers for topic '{topic}'")
+            logger.debug(f"🔎 Available handler patterns: {list(self.message_handlers.keys())}")
+            
             # Exact match first
             if topic in self.message_handlers:
-                handlers.extend(self.message_handlers[topic])
+                exact_handlers = self.message_handlers[topic]
+                handlers.extend(exact_handlers)
+                logger.debug(f"✅ Found {len(exact_handlers)} exact match handlers for '{topic}'")
 
             # Wildcard matching
             for pattern, pattern_handlers in self.message_handlers.items():
                 if pattern != topic and self._topic_matches(topic, pattern):
                     handlers.extend(pattern_handlers)
+                    logger.debug(f"✅ Found {len(pattern_handlers)} wildcard handlers for '{topic}' matching pattern '{pattern}'")
+                elif pattern != topic:
+                    logger.debug(f"❌ Topic '{topic}' does NOT match pattern '{pattern}'")
 
+        # DEBUG: Final results
+        logger.debug(f"🎯 Total handlers found for '{topic}': {len(handlers)}")
         return handlers
 
     def _topic_matches(self, topic: str, pattern: str) -> bool:
