@@ -1789,17 +1789,24 @@ class DashboardWindow(BaseWindow):
                 faculty_id = data.get('faculty_id')
                 new_status = data.get('status')
                 
+                logger.info(f"🎯 [DASHBOARD] Processing faculty_status notification: Faculty {faculty_id}, Status: {new_status} (type: {type(new_status)})")
+                
                 if faculty_id is not None and new_status is not None:
+                    # 🔧 FIX: Proper status mapping with detailed logging
+                    converted_status = self._map_status_for_display(new_status)
+                    logger.info(f"🎯 [DASHBOARD] Status conversion: {new_status} -> {converted_status}")
+                    
                     # Update the faculty card
-                    card_updated = self.update_faculty_card_status(faculty_id, new_status)
-                    logger.debug(f"System notification for faculty {faculty_id} status processed, card_updated: {card_updated}.")
+                    card_updated = self.update_faculty_card_status(faculty_id, converted_status)
+                    logger.info(f"🎯 [DASHBOARD] Faculty {faculty_id} status update result: card_updated={card_updated}")
+                    
                     # System notifications are secondary to direct status updates
                     # Only refresh if card wasn't found and updated in place
                     if not card_updated:
-                        logger.debug(f"System notification: Faculty card for ID {faculty_id} not visible, triggering refresh.")
+                        logger.info(f"🔄 [DASHBOARD] Faculty card for ID {faculty_id} not visible, triggering refresh")
                         self.request_ui_refresh.emit()
                     else:
-                        logger.debug(f"System notification: Faculty card for ID {faculty_id} already updated, skipping refresh.")
+                        logger.info(f"✅ [DASHBOARD] Faculty card for ID {faculty_id} updated successfully")
             
             # ✅ FIX: Handle faculty response notifications (BUSY, ACKNOWLEDGE, etc.)
             elif data.get('type') == 'faculty_response_received':
@@ -1810,28 +1817,60 @@ class DashboardWindow(BaseWindow):
                 logger.info(f"🔧 [DASHBOARD] Processing faculty response: Faculty {faculty_id}, Response: {response_type}, Status: {new_status}")
                 
                 if faculty_id is not None and new_status is not None:
-                    # Map consultation status to faculty display status
-                    if new_status == 'busy':
-                        display_status = 'busy'
-                    elif new_status == 'accepted':
-                        display_status = True  # Available (consultation accepted doesn't change availability)
-                    else:
-                        display_status = True  # Default to available
+                    # 🔧 FIX: Use proper status mapping for faculty responses
+                    display_status = self._map_status_for_display(new_status)
+                    logger.info(f"🔧 [DASHBOARD] Faculty response status conversion: {new_status} -> {display_status}")
                     
                     # Update the faculty card
                     card_updated = self.update_faculty_card_status(faculty_id, display_status)
                     logger.info(f"🔧 [DASHBOARD] Faculty response notification for faculty {faculty_id} processed, card_updated: {card_updated}")
                     
                     if not card_updated:
-                        logger.info(f"🔧 [DASHBOARD] Faculty card for ID {faculty_id} not found, triggering full refresh")
+                        logger.info(f"🔄 [DASHBOARD] Faculty card for ID {faculty_id} not found, triggering full refresh")
                         self.request_ui_refresh.emit()
                     else:
-                        logger.info(f"🔧 [DASHBOARD] Faculty card for ID {faculty_id} updated successfully")
+                        logger.info(f"✅ [DASHBOARD] Faculty card for ID {faculty_id} updated successfully")
                         
         except Exception as e:
             logger.error(f"Error processing system notification safely: {e}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
+
+    def _map_status_for_display(self, status):
+        """
+        Map various status formats to consistent display status.
+        
+        Args:
+            status: Status in various formats (bool, str, etc.)
+            
+        Returns:
+            str: Standardized status ('available', 'busy', 'offline')
+        """
+        logger.info(f"🔄 [STATUS MAPPING] Input: {status} (type: {type(status)})")
+        
+        # Handle boolean status (from ESP32/Faculty Controller)
+        if status is True or status == True:
+            result = 'available'
+        elif status is False or status == False:
+            result = 'offline'
+        # Handle string status
+        elif isinstance(status, str):
+            status_lower = status.lower().strip()
+            if status_lower in ['available', 'present', 'online', 'active']:
+                result = 'available'
+            elif status_lower in ['busy', 'in_consultation', 'occupied']:
+                result = 'busy'
+            elif status_lower in ['offline', 'away', 'unavailable', 'absent']:
+                result = 'offline'
+            else:
+                logger.warning(f"🔄 [STATUS MAPPING] Unknown string status: '{status}', defaulting to offline")
+                result = 'offline'
+        else:
+            logger.warning(f"🔄 [STATUS MAPPING] Unknown status type: {type(status)}, defaulting to offline")
+            result = 'offline'
+        
+        logger.info(f"🔄 [STATUS MAPPING] Output: {result}")
+        return result
 
     def update_faculty_card_status(self, faculty_id, new_status):
         """

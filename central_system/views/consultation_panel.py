@@ -1299,11 +1299,13 @@ class ConsultationPanel(QTabWidget):
                 self.handle_realtime_consultation_update
             )
             
-            # Subscribe to system notifications for backup/redundancy
-            success_system = subscribe_to_topic(
-                "consultease/system/notifications",
-                self.handle_system_notification_backup
-            )
+            # DISABLED: Subscribe to system notifications for backup/redundancy
+            # This causes conflicts with DashboardWindow which is the primary handler
+            # success_system = subscribe_to_topic(
+            #     "consultease/system/notifications",
+            #     self.handle_system_notification_backup
+            # )
+            success_system = True  # Assume success since we're not subscribing
             
             # Subscribe to student-specific notifications if we have a student
             success_student = True
@@ -1322,7 +1324,7 @@ class ConsultationPanel(QTabWidget):
                 self._mqtt_subscriptions_setup = True
                 logger.info("✅ [CONSULTATION PANEL] Set up real-time consultation update subscriptions successfully")
                 logger.info(f"   📱 UI Updates: consultease/ui/consultation_updates")
-                logger.info(f"   🌐 System Notifications: consultease/system/notifications")
+                logger.info(f"   🌐 System Notifications: DISABLED (handled by DashboardWindow)")
                 if self.student:
                     student_id = self.student.get('id') if isinstance(self.student, dict) else getattr(self.student, 'id', None)
                     if student_id:
