@@ -226,13 +226,14 @@ class DashboardWindow(BaseWindow):
             student: Student object containing user information
             parent: Parent widget (optional)
         """
-        super().__init__(parent)
+        # Set student first, before calling super().__init__ which may call init_ui()
         self.student = student
         
         # Track last refresh time to prevent rapid refreshes that override real-time updates
         self._last_refresh_time = 0
         self._min_refresh_interval = 2.0  # Minimum 2 seconds between full refreshes
         
+        # Initialize UI component references
         self.faculty_card_manager = None
         self.consultation_panel = None
         self.faculty_grid = None
@@ -246,8 +247,8 @@ class DashboardWindow(BaseWindow):
         self._last_faculty_data_list = []
         self._last_faculty_hash = None
         
-        # Setup the main UI
-        self.init_ui()
+        # Call parent constructor (this may call init_ui)
+        super().__init__(parent)
 
         # Set up real-time updates for consultation status
         self.setup_real_time_updates()
@@ -255,7 +256,7 @@ class DashboardWindow(BaseWindow):
         # Set up real-time updates for faculty status
         self.setup_realtime_updates()
 
-        # Connect refresh request signal to actual refresh
+        # Connect refresh request signal to throttled refresh
         self.request_ui_refresh.connect(self.refresh_faculty_status_throttled)
 
         # Initial faculty data load
@@ -264,7 +265,7 @@ class DashboardWindow(BaseWindow):
         # Setup inactivity monitoring
         self.setup_inactivity_monitor()
 
-        logger.info(f"Dashboard initialized with student: ID={student.get('id') if isinstance(student, dict) else getattr(student, 'id', 'Unknown')}, Name={student.get('name') if isinstance(student, dict) else getattr(student, 'name', 'Unknown')}, RFID={student.get('rfid') if isinstance(student, dict) else getattr(student, 'rfid', 'Unknown')}")
+        logger.info(f"Dashboard initialized with student: ID={student.get('id') if isinstance(student, dict) else getattr(student, 'id', 'Unknown')}, Name={student.get('name') if isinstance(student, dict) else getattr(student, 'name', 'Unknown')}, RFID={student.get('rfid_uid') if isinstance(student, dict) else getattr(student, 'rfid_uid', 'Unknown')}")
 
     def init_ui(self):
         """
