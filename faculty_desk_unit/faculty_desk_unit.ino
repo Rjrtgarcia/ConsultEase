@@ -332,7 +332,13 @@ void processNextQueuedConsultation() {
   if (isConsultationQueueEmpty()) {
     DEBUG_PRINTLN("📭 No more consultations in queue");
     currentMessageDisplayed = false;
-    updateMainDisplay(); // Return to normal display
+    
+    // ✅ FIX: Clear entire screen to remove any persistent cancellation text
+    // The cancellation screen puts "CONSULTATION" text at (10, 10) which is outside MAIN_AREA_Y
+    tft.fillScreen(COLOR_BACKGROUND);
+    
+    // Redraw complete UI to ensure clean state
+    drawCompleteUI(); // This will properly redraw all panels and call updateMainDisplay()
     return;
   }
   
@@ -785,8 +791,9 @@ private:
   int consecutiveDetections = 0;
   int consecutiveMisses = 0;
 
-  const int CONFIRM_SCANS = 2;            // Scans needed to confirm presence
-  const int CONFIRM_ABSENCE_SCANS = 3;    // More scans needed to confirm absence
+  // ⚡ REAL-TIME OPTIMIZED: Reduced confirmation requirements for faster detection
+  const int CONFIRM_SCANS = 1;            // ⚡ REDUCED: Only 1 scan to confirm presence (was 2)
+  const int CONFIRM_ABSENCE_SCANS = 2;    // ⚡ REDUCED: Only 2 scans to confirm absence (was 3)
 
 public:
   void checkBeacon(bool beaconFound, int rssi = 0) {

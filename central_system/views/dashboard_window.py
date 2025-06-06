@@ -1725,8 +1725,38 @@ class DashboardWindow(BaseWindow):
                         self.request_ui_refresh.emit()
                     else:
                         logger.debug(f"System notification: Faculty card for ID {faculty_id} already updated, skipping refresh.")
+            
+            # ✅ FIX: Handle faculty response notifications (BUSY, ACKNOWLEDGE, etc.)
+            elif data.get('type') == 'faculty_response_received':
+                faculty_id = data.get('faculty_id')
+                response_type = data.get('response_type')
+                new_status = data.get('new_status')
+                
+                logger.info(f"🔧 [DASHBOARD] Processing faculty response: Faculty {faculty_id}, Response: {response_type}, Status: {new_status}")
+                
+                if faculty_id is not None and new_status is not None:
+                    # Map consultation status to faculty display status
+                    if new_status == 'busy':
+                        display_status = 'busy'
+                    elif new_status == 'accepted':
+                        display_status = True  # Available (consultation accepted doesn't change availability)
+                    else:
+                        display_status = True  # Default to available
+                    
+                    # Update the faculty card
+                    card_updated = self.update_faculty_card_status(faculty_id, display_status)
+                    logger.info(f"🔧 [DASHBOARD] Faculty response notification for faculty {faculty_id} processed, card_updated: {card_updated}")
+                    
+                    if not card_updated:
+                        logger.info(f"🔧 [DASHBOARD] Faculty card for ID {faculty_id} not found, triggering full refresh")
+                        self.request_ui_refresh.emit()
+                    else:
+                        logger.info(f"🔧 [DASHBOARD] Faculty card for ID {faculty_id} updated successfully")
+                        
         except Exception as e:
             logger.error(f"Error processing system notification safely: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
 
     def update_faculty_card_status(self, faculty_id, new_status):
         """
