@@ -514,11 +514,30 @@ class MQTTRouter:
                     with get_db() as db:
                         faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
                         if faculty:
-                            logger.info(f"Updating faculty {faculty_id} availability to {availability}")
-                            faculty.availability = availability
+                            # Convert availability string to boolean status for database
+                            new_status = availability == "Available"
+                            logger.info(f"Updating faculty {faculty_id} status to {new_status} (from {availability})")
+                            faculty.status = new_status
                             faculty.last_seen = datetime.now() # Update last_seen timestamp
                             db.commit()
-                            logger.info(f"Faculty {faculty_id} availability updated to {availability} in database.")
+                            logger.info(f"Faculty {faculty_id} status updated to {new_status} in database.")
+                            
+                            # Publish status update notification for real-time UI updates
+                            try:
+                                from ..utils.mqtt_utils import publish_mqtt_message
+                                notification = {
+                                    'type': 'faculty_status',
+                                    'faculty_id': faculty_id,
+                                    'faculty_name': faculty.name,
+                                    'status': new_status,
+                                    'availability': availability,
+                                    'timestamp': datetime.now().isoformat()
+                                }
+                                publish_mqtt_message(f"consultease/faculty/{faculty_id}/status_update", notification)
+                                publish_mqtt_message("consultease/system/notifications", notification)
+                                logger.debug(f"Published status update notifications for faculty {faculty_id}")
+                            except Exception as pub_e:
+                                logger.warning(f"Failed to publish status update notifications: {pub_e}")
                         else:
                             logger.warning(f"Faculty with ID {faculty_id} not found in database.")
                 else:

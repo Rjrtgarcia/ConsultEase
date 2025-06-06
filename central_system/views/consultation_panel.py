@@ -690,6 +690,8 @@ class ConsultationHistoryPanel(QFrame):
 
             # Faculty name
             faculty_item = QTableWidgetItem(consultation.faculty.name)
+            # Store consultation ID as data for real-time updates
+            faculty_item.setData(Qt.UserRole, consultation.id)
             self.consultation_table.setItem(row_position, 0, faculty_item)
 
             # Course code
@@ -753,9 +755,7 @@ class ConsultationHistoryPanel(QFrame):
             date_item = QTableWidgetItem(date_str)
             self.consultation_table.setItem(row_position, 3, date_item)
 
-            # Store consultation ID as data for real-time updates
-            self.consultation_table.setItem(row_position, 0, faculty_item)
-            faculty_item.setData(Qt.UserRole, consultation.id)
+            # Note: consultation ID already stored in faculty_item above
 
             # Actions
             actions_cell = QWidget()
@@ -834,6 +834,148 @@ class ConsultationHistoryPanel(QFrame):
         """
         dialog = ConsultationDetailsDialog(consultation, self)
         dialog.exec_()
+
+    def update_consultation_status_realtime(self, consultation_id, new_status):
+        """
+        Update a specific consultation's status in the table without full refresh.
+        
+        Args:
+            consultation_id (int): ID of the consultation to update
+            new_status (str): New status of the consultation
+        """
+        try:
+            logger.info(f"🔄 [TABLE UPDATE] Real-time status update for consultation {consultation_id} -> {new_status}")
+            
+            # Debug table state
+            table_rows = self.consultation_table.rowCount()
+            logger.info(f"📊 [TABLE UPDATE] Table has {table_rows} rows")
+            
+            # Find the row with this consultation ID
+            for row in range(table_rows):
+                faculty_item = self.consultation_table.item(row, 0)
+                if faculty_item:
+                    stored_consultation_id = faculty_item.data(Qt.UserRole)
+                    logger.debug(f"🔍 [TABLE UPDATE] Row {row}: stored consultation ID = {stored_consultation_id}")
+                    
+                    if stored_consultation_id == consultation_id:
+                        logger.info(f"🎯 [TABLE UPDATE] Found consultation {consultation_id} at row {row}")
+                        
+                        # Update the status column
+                        status_item = self.consultation_table.item(row, 2)
+                        if status_item:
+                            old_status = status_item.text()
+                            logger.info(f"📝 [TABLE UPDATE] Updating status from '{old_status}' to '{new_status.capitalize()}'")
+                            
+                            # Update status text
+                            status_item.setText(new_status.capitalize())
+                            
+                            # Update status colors
+                            status_colors = {
+                                "pending": {
+                                    "bg": QColor(255, 248, 220),
+                                    "fg": QColor(184, 134, 11),
+                                    "border": "#DAA520"
+                                },
+                                "accepted": {
+                                    "bg": QColor(240, 248, 255),
+                                    "fg": QColor(34, 139, 34),
+                                    "border": "#228B22"
+                                },
+                                "busy": {
+                                    "bg": QColor(255, 245, 245),
+                                    "fg": QColor(220, 53, 69),
+                                    "border": "#dc3545"
+                                },
+                                "completed": {
+                                    "bg": QColor(230, 240, 255),
+                                    "fg": QColor(65, 105, 225),
+                                    "border": "#4169E1"
+                                },
+                                "cancelled": {
+                                    "bg": QColor(255, 245, 245),
+                                    "fg": QColor(178, 134, 11),
+                                    "border": "#B8860B"
+                                }
+                            }
+                            
+                            if new_status in status_colors:
+                                colors = status_colors[new_status]
+                                status_item.setBackground(colors["bg"])
+                                status_item.setForeground(colors["fg"])
+                                logger.info(f"🎨 [TABLE UPDATE] Applied color scheme for status '{new_status}'")
+                            else:
+                                logger.warning(f"⚠️ [TABLE UPDATE] No color scheme found for status '{new_status}'")
+                            
+                            # Force table to update display - use multiple methods for robustness
+                            self.consultation_table.update()
+                            self.consultation_table.repaint()
+                            self.consultation_table.viewport().update()
+                            
+                            # Also emit a signal to trigger any connected UI updates
+                            try:
+                                self.consultation_table.itemChanged.emit(status_item)
+                            except:
+                                pass  # Ignore if signal doesn't work
+                            
+                            logger.info(f"✅ [TABLE UPDATE] Updated consultation {consultation_id} status display to {new_status}")
+                            return True
+                        else:
+                            logger.error(f"❌ [TABLE UPDATE] Status item not found at row {row}, column 2")
+                            return False
+                else:
+                    logger.debug(f"🔍 [TABLE UPDATE] Row {row}: no faculty item found")
+            
+            logger.warning(f"❌ [TABLE UPDATE] Consultation {consultation_id} not found in table for real-time update")
+            
+            # Debug: List all consultation IDs in the table
+            logger.info(f"📋 [TABLE UPDATE] Current consultation IDs in table:")
+            for row in range(table_rows):
+                faculty_item = self.consultation_table.item(row, 0)
+                if faculty_item:
+                    stored_id = faculty_item.data(Qt.UserRole)
+                    logger.info(f"   Row {row}: Consultation ID {stored_id}")
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ [TABLE UPDATE] Error updating consultation status in real-time: {str(e)}")
+            import traceback
+            logger.error(f"❌ [TABLE UPDATE] Traceback: {traceback.format_exc()}")
+            return False
+
+    def remove_cancel_button_realtime(self, consultation_id):
+        """
+        Remove the cancel button for a consultation that's no longer pending.
+        
+        Args:
+            consultation_id (int): ID of the consultation
+        """
+        try:
+            # Find the row with this consultation ID
+            for row in range(self.consultation_table.rowCount()):
+                faculty_item = self.consultation_table.item(row, 0)
+                if faculty_item and faculty_item.data(Qt.UserRole) == consultation_id:
+                    # Get the actions cell widget
+                    actions_cell = self.consultation_table.cellWidget(row, 4)
+                    if actions_cell:
+                        # Find and remove the cancel button
+                        layout = actions_cell.layout()
+                        if layout:
+                            for i in range(layout.count()):
+                                item = layout.itemAt(i)
+                                if item and item.widget():
+                                    widget = item.widget()
+                                    if isinstance(widget, QPushButton) and widget.text() == "Cancel":
+                                        layout.removeWidget(widget)
+                                        widget.deleteLater()
+                                        logger.info(f"✅ Removed cancel button for consultation {consultation_id}")
+                                        return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error removing cancel button in real-time: {str(e)}")
+            return False
 
     def cancel_consultation(self, consultation):
         """
@@ -1117,7 +1259,12 @@ class ConsultationPanel(QTabWidget):
         # Set up auto-refresh timer for history panel
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.auto_refresh_history)
-        self.refresh_timer.start(60000)  # Refresh every minute
+        self.refresh_timer.start(30000)  # Refresh every 30 seconds (more frequent for better UX)
+        
+        # Set up a shorter timer for more frequent updates when there might be active consultations
+        self.frequent_refresh_timer = QTimer(self)
+        self.frequent_refresh_timer.timeout.connect(self.check_for_pending_consultations)
+        self.frequent_refresh_timer.start(10000)  # Check every 10 seconds
 
         # Connect tab change signal
         self.currentChanged.connect(self.on_tab_changed)
@@ -1135,30 +1282,46 @@ class ConsultationPanel(QTabWidget):
             return
             
         try:
-            from ..utils.mqtt_utils import subscribe_to_topic
+            from ..utils.mqtt_utils import subscribe_to_topic, is_mqtt_connected
+            
+            # Check if MQTT is connected before subscribing
+            if not is_mqtt_connected():
+                logger.warning("⚠️ MQTT not connected yet, will retry subscription setup later")
+                # Retry after a short delay
+                QTimer.singleShot(2000, self.setup_realtime_consultation_updates)
+                return
+            
+            logger.info("🔧 Setting up real-time consultation update subscriptions...")
             
             # Subscribe to UI consultation updates
-            subscribe_to_topic(
+            success_ui = subscribe_to_topic(
                 "consultease/ui/consultation_updates",
                 self.handle_realtime_consultation_update
             )
             
             # Subscribe to student-specific notifications if we have a student
+            success_student = True
             if self.student:
                 student_id = self.student.get('id') if isinstance(self.student, dict) else getattr(self.student, 'id', None)
                 if student_id:
                     student_topic = f"consultease/student/{student_id}/notifications"
-                    subscribe_to_topic(
+                    success_student = subscribe_to_topic(
                         student_topic,
                         self.handle_student_notification
                     )
+                    logger.info(f"📬 Subscribed to student-specific topic: {student_topic}")
             
-            # Mark as set up to prevent duplicate subscriptions
-            self._mqtt_subscriptions_setup = True
-            logger.info("✅ Set up real-time consultation update subscriptions")
+            if success_ui and success_student:
+                # Mark as set up to prevent duplicate subscriptions
+                self._mqtt_subscriptions_setup = True
+                logger.info("✅ Set up real-time consultation update subscriptions successfully")
+            else:
+                logger.error("❌ Failed to set up some MQTT subscriptions")
             
         except Exception as e:
             logger.error(f"❌ Failed to set up real-time consultation updates: {str(e)}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
 
     def handle_realtime_consultation_update(self, topic, data):
         """
@@ -1169,7 +1332,7 @@ class ConsultationPanel(QTabWidget):
             data (dict): Update data
         """
         try:
-            logger.info(f"🔔 Received real-time consultation update: {data}")
+            logger.info(f"🔔 [CONSULTATION PANEL] Received real-time consultation update from topic '{topic}': {data}")
             
             # Extract update information
             update_type = data.get('type')
@@ -1178,21 +1341,38 @@ class ConsultationPanel(QTabWidget):
             new_status = data.get('new_status')
             trigger = data.get('trigger', 'unknown')
             
-            # Only process updates relevant to the current student
+            logger.info(f"🔍 [CONSULTATION PANEL] Extracted data: consultation_id={consultation_id}, student_id={student_id}, new_status={new_status}, trigger={trigger}")
+            
+            # Debug current student information
             current_student_id = None
             if self.student:
                 current_student_id = self.student.get('id') if isinstance(self.student, dict) else getattr(self.student, 'id', None)
+                logger.info(f"🎓 [CONSULTATION PANEL] Current student: {self.student} -> extracted ID: {current_student_id}")
+            else:
+                logger.warning(f"⚠️ [CONSULTATION PANEL] No current student set!")
+            
+            # Student ID matching logic with detailed logging
+            should_process_update = False
             
             if current_student_id and student_id == current_student_id:
-                logger.info(f"📱 Processing consultation update for current student {student_id}: {consultation_id} -> {new_status}")
-                
+                logger.info(f"✅ [CONSULTATION PANEL] Student ID match! Processing consultation update for student {student_id}: {consultation_id} -> {new_status}")
+                should_process_update = True
+            elif not current_student_id:
+                # If no current student is set, still process the update (useful for admin views)
+                logger.info(f"🔧 [CONSULTATION PANEL] No current student set - processing update anyway: {consultation_id} -> {new_status}")
+                should_process_update = True
+            elif current_student_id and student_id != current_student_id:
+                logger.info(f"❌ [CONSULTATION PANEL] Student ID mismatch - ignoring update for student {student_id} (current: {current_student_id})")
+                should_process_update = False
+            
+            if should_process_update:
                 # Use QTimer.singleShot to ensure UI updates happen on main thread
                 QTimer.singleShot(0, lambda: self._process_consultation_update_safe(consultation_id, new_status, trigger, data))
-            else:
-                logger.debug(f"Ignoring consultation update for different student: {student_id} (current: {current_student_id})")
                 
         except Exception as e:
-            logger.error(f"Error handling real-time consultation update: {str(e)}")
+            logger.error(f"❌ [CONSULTATION PANEL] Error handling real-time consultation update: {str(e)}")
+            import traceback
+            logger.error(f"❌ [CONSULTATION PANEL] Traceback: {traceback.format_exc()}")
 
     def _process_consultation_update_safe(self, consultation_id, new_status, trigger, data):
         """
@@ -1205,14 +1385,20 @@ class ConsultationPanel(QTabWidget):
             data (dict): Full update data
         """
         try:
+            logger.info(f"🔄 [CONSULTATION PANEL] Processing consultation update safely: {consultation_id} -> {new_status} (trigger: {trigger})")
+            
             # Update the history panel immediately
             self.refresh_consultation_history_realtime(consultation_id, new_status, trigger)
             
             # Show notification based on update type
             self.show_consultation_update_notification(data)
             
+            logger.info(f"✅ [CONSULTATION PANEL] Successfully processed consultation update for {consultation_id}")
+            
         except Exception as e:
-            logger.error(f"Error processing consultation update safely: {str(e)}")
+            logger.error(f"❌ [CONSULTATION PANEL] Error processing consultation update safely: {str(e)}")
+            import traceback
+            logger.error(f"❌ [CONSULTATION PANEL] Traceback: {traceback.format_exc()}")
 
     def handle_student_notification(self, topic, data):
         """
@@ -1305,31 +1491,55 @@ class ConsultationPanel(QTabWidget):
             trigger (str): What triggered the update
         """
         try:
-            logger.info(f"🔄 Real-time refresh for consultation {consultation_id} -> {new_status} (trigger: {trigger})")
+            logger.info(f"🔄 [HISTORY REFRESH] Real-time refresh for consultation {consultation_id} -> {new_status} (trigger: {trigger})")
+            
+            # Debug: Check if history panel exists
+            if not hasattr(self, 'history_panel') or self.history_panel is None:
+                logger.error(f"❌ [HISTORY REFRESH] History panel not found!")
+                return
+                
+            logger.info(f"📋 [HISTORY REFRESH] History panel found, attempting real-time status update...")
             
             # Try to update the specific consultation status without full refresh
             status_updated = self.history_panel.update_consultation_status_realtime(consultation_id, new_status)
             
             if status_updated:
+                logger.info(f"✅ [HISTORY REFRESH] Status updated successfully for consultation {consultation_id}")
+                
                 # If status was updated successfully, also remove cancel button if no longer pending
                 if new_status != 'pending':
+                    logger.info(f"🗑️ [HISTORY REFRESH] Removing cancel button for consultation {consultation_id} (status: {new_status})")
                     self.history_panel.remove_cancel_button_realtime(consultation_id)
                     
-                logger.info(f"✅ Successfully updated consultation {consultation_id} status in real-time")
+                logger.info(f"✅ [HISTORY REFRESH] Successfully updated consultation {consultation_id} status in real-time")
+                
+                # Force a repaint of the entire history panel to ensure changes are visible
+                self.history_panel.update()
+                self.history_panel.repaint()
+                
             else:
                 # Fallback to full refresh if real-time update fails
-                logger.info("❌ Real-time update failed, falling back to full refresh")
-                self.history_panel.refresh_consultations()
+                logger.warning(f"❌ [HISTORY REFRESH] Real-time update failed for consultation {consultation_id}, falling back to full refresh")
+                
+                # Use QTimer to ensure the refresh happens on the main thread
+                QTimer.singleShot(100, self.history_panel.refresh_consultations)
             
             # If we're not on the history tab, switch to it to show the update
-            if trigger == 'faculty_response' and self.currentIndex() != 1:
-                logger.info("📱 Switching to history tab to show faculty response")
+            current_tab = self.currentIndex()
+            logger.info(f"📱 [HISTORY REFRESH] Current tab: {current_tab}, trigger: {trigger}")
+            if trigger == 'faculty_response' and current_tab != 1:
+                logger.info("📱 [HISTORY REFRESH] Switching to history tab to show faculty response")
                 self.animate_tab_change(1)
                 
         except Exception as e:
-            logger.error(f"Error in real-time consultation history refresh: {str(e)}")
+            logger.error(f"❌ [HISTORY REFRESH] Error in real-time consultation history refresh: {str(e)}")
+            import traceback
+            logger.error(f"❌ [HISTORY REFRESH] Traceback: {traceback.format_exc()}")
             # Fallback to full refresh on error
-            self.history_panel.refresh_consultations()
+            try:
+                QTimer.singleShot(100, self.history_panel.refresh_consultations)
+            except:
+                logger.error(f"❌ [HISTORY REFRESH] Even fallback refresh failed!")
 
     def show_consultation_update_notification(self, update_data):
         """
@@ -1852,6 +2062,28 @@ class ConsultationPanel(QTabWidget):
         # Only refresh if the history tab is visible
         if self.currentIndex() == 1:
             self.history_panel.refresh_consultations()
+    
+    def check_for_pending_consultations(self):
+        """
+        Check for pending consultations and refresh more frequently if found.
+        This is a failsafe in case real-time updates are not working.
+        """
+        try:
+            if hasattr(self, 'history_panel') and self.history_panel:
+                # Check if there are any pending consultations
+                has_pending = False
+                if hasattr(self.history_panel, 'consultations') and self.history_panel.consultations:
+                    for consultation in self.history_panel.consultations:
+                        if hasattr(consultation, 'status') and consultation.status.value == 'pending':
+                            has_pending = True
+                            break
+                
+                # If there are pending consultations, refresh the history to catch any status changes
+                if has_pending:
+                    logger.debug("📋 Found pending consultations, refreshing history for status updates...")
+                    self.history_panel.refresh_consultations()
+        except Exception as e:
+            logger.debug(f"Error checking for pending consultations: {e}")
 
     def refresh_history(self):
         """

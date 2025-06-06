@@ -225,11 +225,11 @@ class DashboardWindow(BaseWindow):
         # Track MQTT subscription setup to prevent duplicates
         self._mqtt_setup_done = False
         
-        # Set up real-time consultation status updates
-        self.setup_real_time_updates()
-        
         super().__init__(parent)
         self.init_ui()
+        
+        # Set up real-time consultation status updates (after parent init)
+        self.setup_real_time_updates()
 
         # Set up smart refresh manager for optimized faculty status updates
         self.smart_refresh = SmartRefreshManager(base_interval=180000, max_interval=600000)
