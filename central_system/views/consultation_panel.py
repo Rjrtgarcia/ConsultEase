@@ -1129,6 +1129,11 @@ class ConsultationPanel(QTabWidget):
         """
         Set up real-time consultation update subscriptions.
         """
+        # Prevent multiple subscriptions
+        if hasattr(self, '_mqtt_subscriptions_setup'):
+            logger.debug("MQTT subscriptions already set up for this consultation panel, skipping")
+            return
+            
         try:
             from ..utils.mqtt_utils import subscribe_to_topic
             
@@ -1148,6 +1153,8 @@ class ConsultationPanel(QTabWidget):
                         self.handle_student_notification
                     )
             
+            # Mark as set up to prevent duplicate subscriptions
+            self._mqtt_subscriptions_setup = True
             logger.info("✅ Set up real-time consultation update subscriptions")
             
         except Exception as e:

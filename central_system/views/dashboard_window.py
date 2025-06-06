@@ -1664,12 +1664,13 @@ class DashboardWindow(BaseWindow):
             # Find and update the corresponding faculty card
             card_updated = self.update_faculty_card_status(faculty_id, new_status)
 
-            # If the card was visible and updated, or even if not (status might affect filters),
-            # trigger a full refresh to ensure data consistency across the dashboard.
-            # This will re-fetch from DB, re-populate grid, and update consultation panel options.
-            logger.debug(f"Realtime update for faculty {faculty_id} processed, card_updated: {card_updated}. Triggering full UI refresh.")
-            # Use signal to trigger UI refresh since we're now on the main thread
-            self.request_ui_refresh.emit()
+            # Only trigger a full refresh if the card wasn't found in the current view
+            # If the card was updated in place, no need for a full refresh
+            if not card_updated:
+                logger.debug(f"Faculty card for ID {faculty_id} not visible, triggering full UI refresh.")
+                self.request_ui_refresh.emit()
+            else:
+                logger.debug(f"Faculty card for ID {faculty_id} updated in place, no full refresh needed.")
             
         except Exception as e:
             logger.error(f"Error processing status update safely: {e}")
@@ -1707,9 +1708,14 @@ class DashboardWindow(BaseWindow):
                 if faculty_id is not None and new_status is not None:
                     # Update the faculty card
                     card_updated = self.update_faculty_card_status(faculty_id, new_status)
-                    logger.debug(f"System notification for faculty {faculty_id} status processed, card_updated: {card_updated}. Triggering full UI refresh.")
-                    # Schedule a full refresh to ensure data consistency
-                    self.request_ui_refresh.emit()
+                    logger.debug(f"System notification for faculty {faculty_id} status processed, card_updated: {card_updated}.")
+                    # System notifications are secondary to direct status updates
+                    # Only refresh if card wasn't found and updated in place
+                    if not card_updated:
+                        logger.debug(f"System notification: Faculty card for ID {faculty_id} not visible, triggering refresh.")
+                        self.request_ui_refresh.emit()
+                    else:
+                        logger.debug(f"System notification: Faculty card for ID {faculty_id} already updated, skipping refresh.")
         except Exception as e:
             logger.error(f"Error processing system notification safely: {e}")
 
