@@ -1277,7 +1277,7 @@ class ConsultationPanel(QTabWidget):
         Set up real-time consultation update subscriptions.
         """
         # Prevent multiple subscriptions
-        if hasattr(self, '_mqtt_subscriptions_setup'):
+        if hasattr(self, '_mqtt_subscriptions_setup') and self._mqtt_subscriptions_setup:
             logger.debug("MQTT subscriptions already set up for this consultation panel, skipping")
             return
             

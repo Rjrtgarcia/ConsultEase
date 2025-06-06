@@ -166,20 +166,42 @@ class AsyncMQTTService:
             logger.error(f"Subscription FAILED for topic: {topic}. Broker did not grant QoS.")
 
     def _on_message(self, client, userdata, msg):
-        """Handle incoming MQTT messages."""
+        """Handle incoming MQTT messages with enhanced error handling."""
         try:
             self.messages_received += 1
             topic = msg.topic
 
-            # Decode payload
+            # Validate message format before processing
+            if not topic or len(topic) == 0:
+                logger.warning("Received MQTT message with empty topic, skipping")
+                return
+
+            if not msg.payload:
+                logger.warning(f"Received MQTT message with empty payload for topic '{topic}', skipping")
+                return
+
+            # Enhanced payload decoding with error handling
             try:
                 payload = msg.payload.decode('utf-8')
+                # Validate payload is not corrupted
+                if len(payload.strip()) == 0:
+                    logger.warning(f"Received empty payload for topic '{topic}', skipping")
+                    return
+                    
+                # Try to parse as JSON
                 data = json.loads(payload)
-            except json.JSONDecodeError:
-                # If not JSON, treat as string
+            except json.JSONDecodeError as je:
+                # If not JSON, treat as string but validate it's reasonable
+                if len(payload) > 10000:  # Prevent extremely large payloads
+                    logger.error(f"Payload too large ({len(payload)} chars) for topic '{topic}', skipping")
+                    return
                 data = payload
-            except UnicodeDecodeError:
-                logger.error(f"Failed to decode message payload for topic {topic}")
+                logger.debug(f"Non-JSON message received for topic '{topic}': {payload[:100]}...")
+            except UnicodeDecodeError as ue:
+                logger.error(f"Failed to decode message payload for topic '{topic}': {ue}")
+                return
+            except Exception as e:
+                logger.error(f"Unexpected error decoding payload for topic '{topic}': {e}")
                 return
 
             # Log only important messages to reduce performance impact on Raspberry Pi
@@ -304,9 +326,21 @@ class AsyncMQTTService:
                 if self.is_connected:
                     self.client.disconnect()
                     logger.info("MQTT client disconnected command issued.")
+                    # Wait for disconnection to complete
+                    timeout_count = 0
+                    while self.is_connected and timeout_count < 30:  # 3 second timeout
+                        time.sleep(0.1)
+                        timeout_count += 1
+                        
                 # Stop the Paho client's network loop. This is important to allow threads to exit.
                 self.client.loop_stop(force=True)
                 logger.info("MQTT client network loop stopped.")
+                
+                # Clean up client reference to prevent threading conflicts
+                self.client._clean_session = True  # Force clean session
+                self.client = None
+                logger.info("MQTT client reference cleaned up")
+                
             except Exception as e:
                 logger.error(f"Error during MQTT client disconnection or loop_stop: {e}")
 

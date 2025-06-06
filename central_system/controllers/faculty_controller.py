@@ -26,6 +26,8 @@ class FacultyController:
         """
         self.callbacks = []
         self.queue_service = get_consultation_queue_service()
+        # Pending status updates for faculty that don't exist yet
+        self._pending_status_updates = {}
 
     def start(self):
         """
@@ -262,7 +264,10 @@ class FacultyController:
                     faculty = db.query(Faculty).filter(Faculty.id == faculty_id).with_for_update().first()
 
                     if not faculty:
-                        logger.error(f"Faculty not found in DB: {faculty_id}. Cannot update status.")
+                        logger.warning(f"Faculty not found in DB: {faculty_id}. This may be normal during system startup.")
+                        logger.info(f"Available faculty IDs: {[f.id for f in db.query(Faculty).all()]}")
+                        # Queue the status update for when faculty is created
+                        self._queue_pending_status_update(faculty_id, status)
                         return None
 
                     logger.debug(f"Faculty {faculty.name} (ID: {faculty_id}) current DB status: {faculty.status}. Received new status: {status}")
@@ -431,6 +436,22 @@ class FacultyController:
 
         except Exception as e:
             logger.error(f"Error publishing faculty status notification: {str(e)}")
+
+    def _queue_pending_status_update(self, faculty_id, status):
+        """Queue a status update for a faculty member that doesn't exist yet."""
+        self._pending_status_updates[faculty_id] = {
+            'status': status,
+            'timestamp': datetime.datetime.now()
+        }
+        logger.info(f"Queued pending status update for faculty ID {faculty_id}: {status}")
+
+    def _process_pending_status_updates(self, faculty_id):
+        """Process any pending status updates for a newly created faculty member."""
+        if faculty_id in self._pending_status_updates:
+            pending_update = self._pending_status_updates.pop(faculty_id)
+            logger.info(f"Processing pending status update for faculty ID {faculty_id}: {pending_update['status']}")
+            # Apply the pending status update
+            self.update_faculty_status(faculty_id, pending_update['status'])
 
     def handle_concurrent_status_update(self, faculty_id, status, source="unknown"):
         """
@@ -673,6 +694,9 @@ class FacultyController:
         """Handle post-creation tasks for new faculty."""
         # Invalidate caches
         self._invalidate_faculty_caches()
+
+        # Process any pending status updates for this faculty
+        self._process_pending_status_updates(faculty.id)
 
         # Publish notification
         self._publish_faculty_creation_notification(faculty)
