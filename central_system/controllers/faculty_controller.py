@@ -251,13 +251,12 @@ class FacultyController:
             return None
 
         try:
-            from ..models.base import DatabaseManager
+            from ..models.base import get_db
             import datetime
             
-            db_manager = DatabaseManager()
-            
             # Enhanced transaction handling with isolation
-            with db_manager.get_session_context() as db:
+            db = get_db()
+            try:
                 # Use SELECT FOR UPDATE to prevent concurrent modifications
                 faculty = db.query(Faculty).filter(Faculty.id == faculty_id).with_for_update().first()
                 
@@ -316,6 +315,9 @@ class FacultyController:
                         'version': getattr(faculty, 'version', 1)
                     }
                     return faculty_data
+            finally:
+                # Always close the database session
+                db.close()
 
         except Exception as e:
             logger.error(f"❌ [FACULTY CONTROLLER] Exception during update_faculty_status for ID {faculty_id} (status: {status}): {str(e)}")

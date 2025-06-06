@@ -171,8 +171,13 @@ class InactivityMonitor(QObject):
         self.logout_timer.stop()
         
         # Close warning dialog if open
-        if self.warning_dialog and self.warning_dialog.isVisible():
-            self.warning_dialog.close()
+        if self.warning_dialog:
+            try:
+                if self.warning_dialog.isVisible():
+                    self.warning_dialog.close()
+                self.warning_dialog.deleteLater()
+            except:
+                pass
             self.warning_dialog = None
             
         logger.info("Stopped inactivity monitoring")
@@ -183,8 +188,13 @@ class InactivityMonitor(QObject):
             return
             
         # Close warning dialog if open
-        if self.warning_dialog and self.warning_dialog.isVisible():
-            self.warning_dialog.close()
+        if self.warning_dialog:
+            try:
+                if self.warning_dialog.isVisible():
+                    self.warning_dialog.close()
+                self.warning_dialog.deleteLater()
+            except:
+                pass
             self.warning_dialog = None
             
         # Restart timers
@@ -227,29 +237,96 @@ class InactivityMonitor(QObject):
         if self.warning_dialog and self.warning_dialog.isVisible():
             return
             
-        # Create and show warning dialog
-        self.warning_dialog = InactivityWarningDialog()
-        self.warning_dialog.stay_logged_in.connect(self.reset_timers)
+        try:
+            # Close any existing dialog first
+            if self.warning_dialog:
+                self.warning_dialog.close()
+                self.warning_dialog.deleteLater()
+                self.warning_dialog = None
+            
+            # Get the main window as parent for proper memory management
+            main_window = None
+            for widget in QApplication.topLevelWidgets():
+                if hasattr(widget, 'objectName') and 'dashboard' in widget.objectName().lower():
+                    main_window = widget
+                    break
+            
+            # Create and show warning dialog with proper parent
+            self.warning_dialog = InactivityWarningDialog(main_window)
+            
+            # Connect signal with proper error handling
+            try:
+                self.warning_dialog.stay_logged_in.connect(self._handle_stay_logged_in)
+            except Exception as e:
+                logger.error(f"Error connecting stay_logged_in signal: {e}")
+                return
+            
+            # Position dialog in center of screen
+            screen = QApplication.desktop().screenGeometry()
+            dialog_size = self.warning_dialog.size()
+            x = (screen.width() - dialog_size.width()) // 2
+            y = (screen.height() - dialog_size.height()) // 2
+            self.warning_dialog.move(x, y)
+            
+            # Show dialog non-blocking
+            self.warning_dialog.show()
+            self.warning_dialog.raise_()
+            self.warning_dialog.activateWindow()
+            
+            logger.info("Inactivity warning dialog shown successfully")
+            
+        except Exception as e:
+            logger.error(f"Error showing warning dialog: {e}")
+            # Clean up on error
+            if self.warning_dialog:
+                try:
+                    self.warning_dialog.close()
+                    self.warning_dialog.deleteLater()
+                except:
+                    pass
+                self.warning_dialog = None
         
-        # Position dialog in center of screen
-        screen = QApplication.desktop().screenGeometry()
-        dialog_size = self.warning_dialog.size()
-        x = (screen.width() - dialog_size.width()) // 2
-        y = (screen.height() - dialog_size.height()) // 2
-        self.warning_dialog.move(x, y)
-        
-        # Show dialog non-blocking
-        self.warning_dialog.show()
-        self.warning_dialog.raise_()
-        self.warning_dialog.activateWindow()
-        
+    def _handle_stay_logged_in(self):
+        """Handle the 'Stay Logged In' button click safely."""
+        try:
+            logger.info("User chose to stay logged in")
+            
+            # Close the warning dialog safely
+            if self.warning_dialog and self.warning_dialog.isVisible():
+                self.warning_dialog.close()
+                self.warning_dialog.deleteLater()
+                self.warning_dialog = None
+            
+            # Reset the timers to restart the inactivity monitoring
+            if self.is_active:
+                self.warning_timer.stop()
+                self.logout_timer.stop()
+                self.warning_timer.start(self.WARNING_TIMEOUT)
+                self.logout_timer.start(self.TOTAL_TIMEOUT)
+                logger.info("Inactivity timers reset - monitoring continues")
+            
+        except Exception as e:
+            logger.error(f"Error handling stay logged in: {e}")
+            # Ensure dialog is cleaned up even on error
+            if self.warning_dialog:
+                try:
+                    self.warning_dialog.close()
+                    self.warning_dialog.deleteLater()
+                except:
+                    pass
+                self.warning_dialog = None
+
     def _auto_logout(self):
         """Perform automatic logout at 120 seconds."""
         logger.info("Performing automatic logout due to inactivity")
         
         # Close warning dialog if still open
         if self.warning_dialog and self.warning_dialog.isVisible():
-            self.warning_dialog.close()
+            try:
+                self.warning_dialog.close()
+                self.warning_dialog.deleteLater()
+            except:
+                pass
             self.warning_dialog = None
             
         # Stop monitoring
