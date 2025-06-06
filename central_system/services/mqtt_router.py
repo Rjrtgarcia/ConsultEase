@@ -171,18 +171,18 @@ class MQTTRouter:
     
     def _setup_default_routes(self):
         """Setup default routing rules."""
-        # Faculty status updates
-        self.add_route(MessageRoute(
-            name="faculty_status_route",
-            pattern=re.compile(r"consultease/faculty/\d+/(status|mac_status)"),
-            action=RouteAction.DUPLICATE,
-            target_topics=[
-                "consultease/notifications/faculty_status",
-                "consultease/dashboard/updates"
-            ],
-            priority=MessagePriority.HIGH
-        ))
-        self.add_handler(r"consultease/faculty/\d+/(status|mac_status)", self._handle_faculty_status_update)
+        # DISABLED: Faculty status updates - handled by Faculty Controller to avoid conflicts
+        # self.add_route(MessageRoute(
+        #     name="faculty_status_route",
+        #     pattern=re.compile(r"consultease/faculty/\d+/(status|mac_status)"),
+        #     action=RouteAction.DUPLICATE,
+        #     target_topics=[
+        #         "consultease/notifications/faculty_status",
+        #         "consultease/dashboard/updates"
+        #     ],
+        #     priority=MessagePriority.HIGH
+        # ))
+        # self.add_handler(r"consultease/faculty/\d+/(status|mac_status)", self._handle_faculty_status_update)
         
         # Consultation requests
         self.add_route(MessageRoute(

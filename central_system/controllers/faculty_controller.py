@@ -76,7 +76,10 @@ class FacultyController:
                 logger.error(f"Error in Faculty controller callback: {str(e)}")
 
     def handle_faculty_status_update(self, topic, data):
-        logger.info(f"🔄 MQTT STATUS UPDATE - Topic: {topic}, Data: {data}, Type: {type(data)}")
+        logger.info(f"🔄 [FACULTY CONTROLLER] Received MQTT message")
+        logger.info(f"   Topic: {topic}")
+        logger.info(f"   Data Type: {type(data)}")
+        logger.info(f"   Data: {data}")
 
         faculty_id = None
         status = None
@@ -225,9 +228,12 @@ class FacultyController:
             # Notify registered callbacks with the dictionary
             self._notify_callbacks(faculty_dict_for_callbacks)
             # Publish general notification (already handled by update_faculty_status via _publish_status_update_with_sequence_safe)
-            logger.info(f"Processed status update for faculty ID {faculty_dict_for_callbacks['id']}, new status: {faculty_dict_for_callbacks['status']}")
+            logger.info(f"✅ [FACULTY CONTROLLER] Successfully processed status update")
+            logger.info(f"   Faculty ID: {faculty_dict_for_callbacks['id']}")
+            logger.info(f"   New Status: {faculty_dict_for_callbacks['status']}")
+            logger.info(f"   Publishing to: consultease/faculty/{faculty_dict_for_callbacks['id']}/status_update")
         elif faculty_id is not None: # Log if update attempt was made but failed
-            logger.warning(f"Failed to get updated faculty dictionary for faculty ID {faculty_id} after status update attempt.")
+            logger.error(f"❌ [FACULTY CONTROLLER] Failed to process status update for faculty {faculty_id}")
 
     def update_faculty_status(self, faculty_id, status):
         """
