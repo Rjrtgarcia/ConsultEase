@@ -259,8 +259,9 @@ class DashboardWindow(BaseWindow):
         # Connect refresh request signal to throttled refresh
         self.request_ui_refresh.connect(self.refresh_faculty_status_throttled)
 
-        # Initial faculty data load
-        self._perform_initial_faculty_load()
+        # Delay initial faculty data load until UI is fully ready
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(100, self._perform_initial_faculty_load)
 
         # Setup inactivity monitoring
         self.setup_inactivity_monitor()
@@ -271,6 +272,10 @@ class DashboardWindow(BaseWindow):
         """
         Initialize the dashboard UI.
         """
+        # Initialize faculty card manager for pooled cards
+        from ..ui.pooled_faculty_card import get_faculty_card_manager
+        self.faculty_card_manager = get_faculty_card_manager()
+        
         # Main layout with splitter
         main_layout = QVBoxLayout()
 
@@ -974,69 +979,92 @@ class DashboardWindow(BaseWindow):
 
     def _show_error_message(self, error_text):
         """
-        Show an error message in the faculty grid.
-
+        Show an error message to the user with defensive UI handling.
+        
         Args:
             error_text (str): Error message to display
         """
-        logger.info(f"Showing error message: {error_text}")
+        try:
+            logger.error(f"Dashboard error: {error_text}")
+            
+            # Only clear grid if UI is properly initialized
+            if hasattr(self, 'faculty_grid') and self.faculty_grid is not None:
+                self._clear_faculty_grid_pooled()
+            
+            # Create error message widget only if UI exists
+            if hasattr(self, 'faculty_grid') and self.faculty_grid is not None:
+                error_widget = QWidget()
+                error_widget.setMinimumHeight(200)
+                error_layout = QVBoxLayout(error_widget)
+                error_layout.setAlignment(Qt.AlignCenter)
+                error_layout.setSpacing(15)
 
-        # Clear existing grid first
-        self._clear_faculty_grid_pooled()
+                # Error icon and text
+                error_label = QLabel(f"⚠️ Error Loading Faculty Data")
+                error_label.setAlignment(Qt.AlignCenter)
+                error_label.setStyleSheet("""
+                    QLabel {
+                        font-size: 22px;
+                        font-weight: bold;
+                        color: #e74c3c;
+                        margin: 20px;
+                        padding: 20px;
+                    }
+                """)
+                error_layout.addWidget(error_label)
 
-        # Create error widget
-        error_widget = QWidget()
-        error_widget.setMinimumHeight(250)
-        error_layout = QVBoxLayout(error_widget)
-        error_layout.setAlignment(Qt.AlignCenter)
-        error_layout.setSpacing(15)
+                # Error details
+                detail_label = QLabel(error_text)
+                detail_label.setAlignment(Qt.AlignCenter)
+                detail_label.setWordWrap(True)
+                detail_label.setStyleSheet("""
+                    QLabel {
+                        font-size: 16px;
+                        color: #7f8c8d;
+                        margin: 10px 20px;
+                        padding: 15px;
+                        background-color: #f8f9fa;
+                        border-radius: 8px;
+                        border: 2px solid #e9ecef;
+                    }
+                """)
+                error_layout.addWidget(detail_label)
 
-        # Error title
-        error_title = QLabel("⚠️ Error Loading Faculty Data")
-        error_title.setAlignment(Qt.AlignCenter)
-        error_title.setStyleSheet("""
-            QLabel {
-                font-size: 24px;
-                font-weight: bold;
-                color: #e74c3c;
-                padding: 15px;
-            }
-        """)
-        error_layout.addWidget(error_title)
+                # Add retry button
+                retry_button = QPushButton("🔄 Retry Loading Faculty Data")
+                retry_button.clicked.connect(self.refresh_faculty_status_throttled)
+                retry_button.setStyleSheet("""
+                    QPushButton {
+                        background-color: #3498db;
+                        color: white;
+                        border: none;
+                        border-radius: 8px;
+                        padding: 12px 24px;
+                        font-size: 16px;
+                        font-weight: bold;
+                        margin: 10px;
+                    }
+                    QPushButton:hover {
+                        background-color: #2980b9;
+                    }
+                    QPushButton:pressed {
+                        background-color: #21618c;
+                    }
+                """)
+                error_layout.addWidget(retry_button)
 
-        # Error message
-        error_message = QLabel(error_text)
-        error_message.setAlignment(Qt.AlignCenter)
-        error_message.setWordWrap(True)
-        error_message.setStyleSheet("""
-            QLabel {
-                font-size: 14px;
-                color: #7f8c8d;
-                padding: 10px 20px;
-                background-color: #fdf2f2;
-                border: 2px solid #f5c6cb;
-                border-radius: 8px;
-                margin: 10px;
-            }
-        """)
-        error_layout.addWidget(error_message)
+                error_layout.addStretch()
 
-        # Retry instruction
-        retry_label = QLabel("The system will automatically retry in a few moments.\nIf the problem persists, please contact your administrator.")
-        retry_label.setAlignment(Qt.AlignCenter)
-        retry_label.setWordWrap(True)
-        retry_label.setStyleSheet("""
-            QLabel {
-                font-size: 12px;
-                color: #95a5a6;
-                padding: 10px;
-                font-style: italic;
-            }
-        """)
-        error_layout.addWidget(retry_label)
-
-        # Add to grid
-        self.faculty_grid.addWidget(error_widget, 0, 0, 1, 1)
+                # Add the error widget to the grid
+                self.faculty_grid.addWidget(error_widget, 0, 0)
+            else:
+                # If UI isn't ready, just log the error
+                logger.warning(f"UI not ready for error display: {error_text}")
+                
+        except Exception as e:
+            logger.error(f"Error showing error message: {e}")
+            # Fallback - at least log the original error
+            logger.error(f"Original error that couldn't be displayed: {error_text}")
 
     def filter_faculty(self):
         """
@@ -1569,17 +1597,29 @@ class DashboardWindow(BaseWindow):
 
     def _clear_faculty_grid_pooled(self):
         """
-        Clear the faculty grid efficiently using pooled cards.
+        Clear the faculty grid using pooled cards with proper null checks.
         """
-        # Return all active faculty cards to the pool
-        self.faculty_card_manager.clear_all_cards()
-
-        # Clear the grid layout
-        while self.faculty_grid.count():
-            item = self.faculty_grid.takeAt(0)
-            if item.widget():
-                # Don't delete the widget, it's managed by the pool
-                item.widget().setParent(None)
+        try:
+            # Check if faculty_card_manager is initialized
+            if self.faculty_card_manager is not None:
+                self.faculty_card_manager.clear_all_cards()
+                logger.debug("Cleared all faculty cards using pooled manager")
+            else:
+                logger.warning("Faculty card manager not initialized, skipping card cleanup")
+                
+            # Clear the grid layout if it exists
+            if hasattr(self, 'faculty_grid') and self.faculty_grid is not None:
+                # Clear all widgets from the grid
+                while self.faculty_grid.count():
+                    item = self.faculty_grid.takeAt(0)
+                    if item.widget():
+                        item.widget().deleteLater()
+                logger.debug("Cleared faculty grid layout")
+            else:
+                logger.warning("Faculty grid not initialized, skipping grid cleanup")
+                
+        except Exception as e:
+            logger.error(f"Error clearing faculty grid: {e}")
 
     def showEvent(self, event):
         """
