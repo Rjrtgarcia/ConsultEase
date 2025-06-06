@@ -1676,10 +1676,10 @@ class DashboardWindow(BaseWindow):
 
             # Only trigger a full refresh if the card wasn't found in the current view
             if not card_updated:
-                logger.debug(f"Faculty card for ID {faculty_id} not visible, triggering full UI refresh.")
+                logger.warning(f"❌ [UI FALLBACK] Faculty card for ID {faculty_id} not found, triggering full UI refresh")
                 self.request_ui_refresh.emit()
             else:
-                logger.debug(f"Faculty card for ID {faculty_id} updated in place, no full refresh needed.")
+                logger.info(f"✅ [UI SUCCESS] Faculty card for ID {faculty_id} updated in place, no full refresh needed")
             
         except Exception as e:
             logger.error(f"Error processing status update safely: {e}")
@@ -1737,6 +1737,8 @@ class DashboardWindow(BaseWindow):
             new_status (bool|str): New status (True = Available, False = Unavailable, "busy" = Busy)
         """
         try:
+            logger.info(f"🔍 [UI UPDATE] Searching for faculty card ID {faculty_id} to update status to {new_status}")
+            
             # Normalize status to string
             if new_status is True:
                 status_string = "available"
@@ -1751,28 +1753,55 @@ class DashboardWindow(BaseWindow):
                 logger.warning(f"Unknown status type for faculty {faculty_id}: {new_status}")
                 return False
             
+            logger.info(f"🔍 [UI UPDATE] Grid has {self.faculty_grid.count()} items")
+            
             # Find the faculty card in the grid
             for i in range(self.faculty_grid.count()):
                 container_widget = self.faculty_grid.itemAt(i).widget()
+                logger.debug(f"🔍 [UI UPDATE] Item {i}: container_widget = {type(container_widget).__name__ if container_widget else 'None'}")
+                
                 if not container_widget:
                     continue
                     
                 container_layout = container_widget.layout()
                 if not container_layout or container_layout.count() == 0:
+                    logger.debug(f"🔍 [UI UPDATE] Item {i}: No layout or empty layout")
                     continue
                     
                 faculty_card = container_layout.itemAt(0).widget()
+                logger.debug(f"🔍 [UI UPDATE] Item {i}: faculty_card = {type(faculty_card).__name__ if faculty_card else 'None'}")
+                
                 # Ensure it's a PooledFacultyCard and has the method
-                if not faculty_card or not hasattr(faculty_card, 'update_status') or not hasattr(faculty_card, 'faculty_data'):
+                if not faculty_card:
+                    logger.debug(f"🔍 [UI UPDATE] Item {i}: No faculty_card widget")
                     continue
                 
-                if faculty_card.faculty_data.get('id') == faculty_id:
+                if not hasattr(faculty_card, 'update_status'):
+                    logger.debug(f"🔍 [UI UPDATE] Item {i}: Card missing update_status method")
+                    continue
+                    
+                if not hasattr(faculty_card, 'faculty_data'):
+                    logger.debug(f"🔍 [UI UPDATE] Item {i}: Card missing faculty_data attribute")
+                    continue
+                
+                if not faculty_card.faculty_data:
+                    logger.debug(f"🔍 [UI UPDATE] Item {i}: Card has None faculty_data")
+                    continue
+                
+                card_faculty_id = faculty_card.faculty_data.get('id')
+                logger.debug(f"🔍 [UI UPDATE] Item {i}: Card faculty_id = {card_faculty_id}, looking for {faculty_id}")
+                
+                if card_faculty_id == faculty_id:
+                    logger.info(f"🎯 [UI UPDATE] Found matching faculty card at position {i}")
+                    
                     # Update card's internal state and display using its own method
                     faculty_card.update_status(status_string)
+                    logger.info(f"📝 [UI UPDATE] Called update_status({status_string}) on card")
                     
                     # Update faculty_data dictionary stored in the card
                     faculty_card.faculty_data['available'] = available
                     faculty_card.faculty_data['status'] = status_string
+                    logger.info(f"📝 [UI UPDATE] Updated faculty_data: available={available}, status={status_string}")
 
                     # Update card's objectName for theming
                     if new_status is True:
@@ -1782,17 +1811,22 @@ class DashboardWindow(BaseWindow):
                     else:
                         new_object_name = "faculty_card_unavailable"
                     
-                    if faculty_card.objectName() != new_object_name:
+                    old_object_name = faculty_card.objectName()
+                    if old_object_name != new_object_name:
                         faculty_card.setObjectName(new_object_name)
+                        logger.info(f"📝 [UI UPDATE] Changed objectName: {old_object_name} → {new_object_name}")
+                        
                         # Force style refresh
                         faculty_card.style().unpolish(faculty_card)
                         faculty_card.style().polish(faculty_card)
                         faculty_card.update()
+                        faculty_card.repaint()  # Force immediate repaint
+                        logger.info(f"🎨 [UI UPDATE] Forced style refresh and repaint")
 
-                    logger.debug(f"✅ Updated faculty card for ID {faculty_id} to status: {status_string}")
+                    logger.info(f"✅ [UI UPDATE] Successfully updated faculty card for ID {faculty_id} to status: {status_string}")
                     return True # Found and updated
             
-            logger.debug(f"Faculty card for ID {faculty_id} not found in current view for status update.")
+            logger.warning(f"❌ [UI UPDATE] Faculty card for ID {faculty_id} not found in current view")
             return False # Card not found
             
         except Exception as e:

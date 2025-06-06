@@ -44,8 +44,7 @@ class FacultyController:
         # Subscribe to legacy faculty desk unit status updates for backward compatibility
         subscribe_to_topic(MQTTTopics.LEGACY_FACULTY_STATUS, self.handle_faculty_status_update)
 
-        # Subscribe to faculty heartbeat for enhanced monitoring
-        subscribe_to_topic("consultease/faculty/+/heartbeat", self.handle_faculty_heartbeat)
+        # Note: Faculty heartbeat is handled by FacultyResponseController to avoid duplicate subscriptions
 
     def stop(self):
         """

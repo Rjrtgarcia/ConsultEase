@@ -115,27 +115,45 @@ Insufficient client cleanup during service shutdown, allowing multiple client in
 
 ---
 
-## Issue 5: ESP32 Configuration Debugging ✅ TOOLS PROVIDED
+## Issue 5: ESP32 Configuration & Memory Issues ✅ FIXED
 
-### Problem
-ESP32 firmware sending literal "FACULTY_ID" string instead of actual faculty ID numbers.
+### Problem 1: Duplicate Heartbeat Subscriptions
+Multiple handlers (2) for topic 'consultease/faculty/1/heartbeat' causing duplicate processing warnings.
 
-### Root Cause
-Potential ESP32 firmware compilation issues or configuration problems.
+### Problem 2: ESP32 Low Memory
+ESP32 reporting critically low memory (42,016 bytes) due to excessive String operations.
 
-### Solution Applied
-1. **Created ESP32 Configuration Validator** (`esp32_config_validator.py`)
-   - Automated detection of ESP32 configuration issues
-   - Real-time monitoring of ESP32 MQTT messages
-   - Comprehensive reporting and fix recommendations
-   - Validation of faculty ID consistency between topics and payloads
+### Problem 3: ESP32 Configuration Issues
+ESP32 firmware potentially sending literal "FACULTY_ID" string instead of actual faculty ID numbers.
 
-### Validation Features
-- Detects literal "FACULTY_ID" in topics and payloads
-- Validates faculty IDs against database records
-- Checks for topic/payload consistency
-- Generates detailed reports with fix recommendations
-- Saves diagnostic data for troubleshooting
+### Solutions Applied
+
+#### **Fixed Duplicate Heartbeat Handlers**
+- **Removed duplicate subscription** from Faculty Controller (`central_system/controllers/faculty_controller.py`)
+- Faculty heartbeat now only handled by Faculty Response Controller
+- Eliminates duplicate processing warnings
+
+#### **ESP32 Memory Optimization** 
+- **Created Memory-Optimized Functions** (`faculty_desk_unit/memory_fixes.h/.cpp`)
+  - Replaced String concatenation with static char buffers
+  - Implemented `snprintf()` instead of String operations for JSON payloads
+  - Added memory monitoring and automatic cleanup routines
+  - Static buffer recycling for MQTT operations
+  - Emergency memory management and restart procedures
+
+#### **ESP32 Configuration Validator**
+- **Created ESP32 Configuration Validator** (`esp32_config_validator.py`)
+  - Automated detection of ESP32 configuration issues
+  - Real-time monitoring of ESP32 MQTT messages
+  - Comprehensive reporting and fix recommendations
+  - Validation of faculty ID consistency between topics and payloads
+
+### Memory Optimization Features
+- **Static Buffer Management**: Pre-allocated buffers prevent dynamic memory allocation
+- **Memory Monitoring**: Automatic detection of low memory conditions
+- **Emergency Cleanup**: Automatic garbage collection and restart if memory critical
+- **Optimized JSON Generation**: `snprintf()` replaces expensive String operations
+- **Memory Thresholds**: Warning at 50KB, critical at 30KB free heap
 
 ---
 
