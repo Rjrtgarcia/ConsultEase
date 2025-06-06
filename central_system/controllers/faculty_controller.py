@@ -164,32 +164,57 @@ class FacultyController:
                 try:
                     faculty_id = int(parts[2])
                     if isinstance(data, dict):
-                        # Improved status processing logic to handle BUSY status correctly
-                        status_str = data.get("status", "").upper()
+                        # 🔧 ENHANCED: Improved status processing logic with better logging
+                        status_str = data.get("status", "")
                         present_bool = data.get("present", None)
+                        detailed_status = data.get("detailed_status", "")
                         
-                        # Determine status based on both status string and present boolean
-                        # Priority: Use status string for semantic meaning, fall back to present boolean
+                        logger.info(f"🔍 [FACULTY CONTROLLER] Processing status data:")
+                        logger.info(f"   status_str: '{status_str}'")
+                        logger.info(f"   present_bool: {present_bool}")
+                        logger.info(f"   detailed_status: '{detailed_status}'")
+                        
+                        # Enhanced status determination with multiple fallbacks
+                        status = None
+                        
+                        # Primary: Use status string for semantic meaning
                         if status_str:
-                            if status_str in ["AVAILABLE", "PRESENT"]:
+                            status_upper = status_str.upper().strip()
+                            logger.info(f"🔍 [FACULTY CONTROLLER] Processing status_str: '{status_upper}'")
+                            
+                            if status_upper in ["AVAILABLE", "PRESENT", "ONLINE", "ACTIVE"]:
                                 status = True
-                            elif status_str in ["AWAY", "OFFLINE", "UNAVAILABLE"]:
+                                logger.info(f"✅ [FACULTY CONTROLLER] Status '{status_str}' -> Available (True)")
+                            elif status_upper in ["AWAY", "OFFLINE", "UNAVAILABLE", "ABSENT"]:
                                 status = False
-                            elif "BUSY" in status_str:
+                                logger.info(f"🔴 [FACULTY CONTROLLER] Status '{status_str}' -> Unavailable (False)")
+                            elif "BUSY" in status_upper or "IN_CONSULTATION" in status_upper:
                                 status = False  # Busy faculty are not available for new consultations
+                                logger.info(f"⏰ [FACULTY CONTROLLER] Status '{status_str}' -> Busy (False)")
                             else:
-                                logger.warning(f"Unknown status string: {status_str}, falling back to present field")
-                                status = bool(present_bool) if present_bool is not None else None
-                        elif present_bool is not None:
-                            # Fallback to present boolean if no status string
+                                logger.warning(f"⚠️ [FACULTY CONTROLLER] Unknown status string: '{status_str}', checking present field")
+                        
+                        # Secondary: Use present boolean if status string didn't resolve
+                        if status is None and present_bool is not None:
                             status = bool(present_bool)
-                        else:
-                            logger.warning(f"No valid status information found in data: {data}")
+                            logger.info(f"🔍 [FACULTY CONTROLLER] Using present_bool: {present_bool} -> {status}")
+                        
+                        # Tertiary: Try detailed_status as fallback
+                        if status is None and detailed_status:
+                            detailed_upper = detailed_status.upper().strip()
+                            if detailed_upper in ["AVAILABLE", "PRESENT"]:
+                                status = True
+                                logger.info(f"🔍 [FACULTY CONTROLLER] Using detailed_status: '{detailed_status}' -> True")
+                            else:
+                                status = False
+                                logger.info(f"🔍 [FACULTY CONTROLLER] Using detailed_status: '{detailed_status}' -> False")
+                        
+                        # Final validation
+                        if status is None:
+                            logger.error(f"❌ [FACULTY CONTROLLER] Could not determine status from data: {data}")
                             return
                         
-                        if status is None:
-                            logger.warning(f"Could not determine status from data: {data}")
-                            return
+                        logger.info(f"✅ [FACULTY CONTROLLER] Final status determination: {status}")
 
                         # Enhanced status details (optional)
                         ntp_sync_status = data.get('ntp_sync_status')
@@ -250,15 +275,21 @@ class FacultyController:
             logger.error(f"Invalid parameters: faculty_id={faculty_id}, status={status}")
             return None
 
-        try:
-            from ..models.base import get_db
-            import datetime
-            
-            # Enhanced transaction handling with isolation
-            db = get_db()
+        # 🔧 ENHANCED: Improved database handling with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            db = None
             try:
-                # Use SELECT FOR UPDATE to prevent concurrent modifications
-                faculty = db.query(Faculty).filter(Faculty.id == faculty_id).with_for_update().first()
+                from ..models.base import get_db
+                import datetime
+                
+                logger.info(f"🔄 [FACULTY CONTROLLER] Database update attempt {attempt + 1}/{max_retries} for faculty {faculty_id}")
+                
+                # Get fresh database session for each attempt
+                db = get_db()
+                
+                # Simple query without FOR UPDATE to avoid deadlocks
+                faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
                 
                 if not faculty:
                     logger.warning(f"❌ Faculty with ID {faculty_id} not found in database")
@@ -271,15 +302,22 @@ class FacultyController:
                 previous_status = faculty.status
                 status_changed = previous_status != status
                 
-                logger.info(f"🔄 [FACULTY CONTROLLER] Updating faculty {faculty_id} status: {previous_status} -> {status}")
+                logger.info(f"🔄 [FACULTY CONTROLLER] Faculty {faculty_id}: {previous_status} -> {status} (changed: {status_changed})")
 
+                # Always update last_seen, even if status hasn't changed
+                faculty.last_seen = datetime.datetime.now()
+                
                 if status_changed:
                     # Update faculty status
                     faculty.status = status
-                    faculty.last_seen = datetime.datetime.now()
-                    
-                    # Force immediate commit to ensure changes are persisted
+                    logger.info(f"🔄 [FACULTY CONTROLLER] Setting faculty.status = {status}")
+
+                try:
+                    # Attempt to commit the changes
                     db.commit()
+                    logger.info(f"✅ [FACULTY CONTROLLER] Database commit successful for faculty {faculty_id}")
+                    
+                    # Refresh to get updated data
                     db.refresh(faculty)
                     
                     # Prepare safe faculty data for callbacks and notifications
@@ -288,42 +326,66 @@ class FacultyController:
                         'name': faculty.name,
                         'department': faculty.department,
                         'status': faculty.status,
+                        'available': faculty.status,  # Add available field for compatibility
                         'last_seen': faculty.last_seen.isoformat() if faculty.last_seen else None,
                         'ble_id': faculty.ble_id,
                         'version': getattr(faculty, 'version', 1)
                     }
                     
-                    logger.info(f"✅ [FACULTY CONTROLLER] Faculty {faculty_id} status updated in database: {status}")
+                    logger.info(f"✅ [FACULTY CONTROLLER] Faculty {faculty_id} updated: status={faculty.status}, last_seen={faculty.last_seen}")
                     
                     # Publish status update immediately after successful commit
-                    self._publish_status_update_with_sequence_safe(faculty_data, status, previous_status)
-                    
-                    # Invalidate caches
-                    self._invalidate_faculty_caches()
+                    if status_changed:
+                        self._publish_status_update_with_sequence_safe(faculty_data, status, previous_status)
+                        
+                        # Invalidate caches
+                        self._invalidate_faculty_caches()
+                        
+                        logger.info(f"🎯 [FACULTY CONTROLLER] Status change published for faculty {faculty_id}")
+                    else:
+                        logger.info(f"🔄 [FACULTY CONTROLLER] No status change, but last_seen updated for faculty {faculty_id}")
                     
                     return faculty_data
+                    
+                except Exception as commit_error:
+                    logger.error(f"❌ [FACULTY CONTROLLER] Commit failed on attempt {attempt + 1}: {commit_error}")
+                    db.rollback()
+                    
+                    if attempt == max_retries - 1:
+                        # Last attempt failed
+                        raise commit_error
+                    else:
+                        # Retry after a short delay
+                        import time
+                        time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+                        continue
+                        
+            except Exception as e:
+                logger.error(f"❌ [FACULTY CONTROLLER] Database error on attempt {attempt + 1}: {str(e)}")
+                
+                if attempt == max_retries - 1:
+                    # All retries exhausted
+                    logger.error(f"❌ [FACULTY CONTROLLER] All {max_retries} attempts failed for faculty {faculty_id}")
+                    import traceback
+                    logger.error(f"❌ [FACULTY CONTROLLER] Final traceback: {traceback.format_exc()}")
+                    return None
                 else:
-                    logger.debug(f"🔄 Faculty {faculty_id} status unchanged ({status}), skipping update")
-                    # Still return faculty data for consistency
-                    faculty_data = {
-                        'id': faculty.id,
-                        'name': faculty.name,
-                        'department': faculty.department,
-                        'status': faculty.status,
-                        'last_seen': faculty.last_seen.isoformat() if faculty.last_seen else None,
-                        'ble_id': faculty.ble_id,
-                        'version': getattr(faculty, 'version', 1)
-                    }
-                    return faculty_data
+                    # Wait before retry
+                    import time
+                    time.sleep(0.1 * (attempt + 1))
+                    
             finally:
-                # Always close the database session
-                db.close()
-
-        except Exception as e:
-            logger.error(f"❌ [FACULTY CONTROLLER] Exception during update_faculty_status for ID {faculty_id} (status: {status}): {str(e)}")
-            import traceback
-            logger.error(f"❌ [FACULTY CONTROLLER] Traceback: {traceback.format_exc()}")
-            return None
+                # Always close the database session for this attempt
+                if db:
+                    try:
+                        db.close()
+                        logger.debug(f"🔒 [FACULTY CONTROLLER] Database session closed for attempt {attempt + 1}")
+                    except Exception as close_error:
+                        logger.warning(f"⚠️ [FACULTY CONTROLLER] Error closing DB session: {close_error}")
+        
+        # Should not reach here, but return None as fallback
+        logger.error(f"❌ [FACULTY CONTROLLER] Unexpected end of retry loop for faculty {faculty_id}")
+        return None
 
     def _publish_status_update_with_sequence_safe(self, faculty_data, new_status, previous_status):
         """
