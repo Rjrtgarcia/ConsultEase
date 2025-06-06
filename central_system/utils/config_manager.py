@@ -33,7 +33,7 @@ class ConfigManager:
             'max_overflow': 10
         },
         'mqtt': {
-            'broker_host': '192.168.100.3',
+            'broker_host': 'localhost',
             'broker_port': 1883,
             'username': None,
             'password': None,
