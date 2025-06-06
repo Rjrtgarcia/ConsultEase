@@ -219,67 +219,52 @@ class DashboardWindow(BaseWindow):
     request_ui_refresh = pyqtSignal()
 
     def __init__(self, student=None, parent=None):
-        self.student = student
-        self.faculty_list = []
-        self.consultation_panel = None
-        
-        # Track MQTT subscription setup to prevent duplicates
-        self._mqtt_setup_done = False
-        
+        """
+        Initialize the dashboard window.
+
+        Args:
+            student: Student object containing user information
+            parent: Parent widget (optional)
+        """
         super().__init__(parent)
-        self.init_ui()
+        self.student = student
         
-        # Set up real-time consultation status updates (after parent init)
+        # Track last refresh time to prevent rapid refreshes that override real-time updates
+        self._last_refresh_time = 0
+        self._min_refresh_interval = 2.0  # Minimum 2 seconds between full refreshes
+        
+        self.faculty_card_manager = None
+        self.consultation_panel = None
+        self.faculty_grid = None
+        self.faculty_scroll = None
+        self.search_box = None
+        self.content_splitter = None
+        self.inactivity_monitor = None
+        self._is_loading = False
+
+        # Faculty data caching and change detection
+        self._last_faculty_data_list = []
+        self._last_faculty_hash = None
+        
+        # Setup the main UI
+        self.init_ui()
+
+        # Set up real-time updates for consultation status
         self.setup_real_time_updates()
 
-        # Set up smart refresh manager for optimized faculty status updates
-        self.smart_refresh = SmartRefreshManager(base_interval=180000, max_interval=600000)
-        self.refresh_timer = QTimer(self)
-        self.refresh_timer.timeout.connect(self.refresh_faculty_status)
-        self.refresh_timer.start(180000)  # Start with 3 minutes
+        # Set up real-time updates for faculty status
+        self.setup_realtime_updates()
 
-        # Set up real-time MQTT subscription for faculty status updates
-        if not self._mqtt_setup_done:
-            self.setup_realtime_updates()
-            self._mqtt_setup_done = True
+        # Connect refresh request signal to actual refresh
+        self.request_ui_refresh.connect(self.refresh_faculty_status_throttled)
 
-        # UI performance utilities
-        self.ui_batcher = get_ui_batcher()
-        self.widget_state_manager = get_widget_state_manager()
+        # Initial faculty data load
+        self._perform_initial_faculty_load()
 
-        # Connect the UI refresh signal
-        self.request_ui_refresh.connect(self.refresh_faculty_status)
+        # Setup inactivity monitoring
+        self.setup_inactivity_monitor()
 
-        # Faculty card manager for pooling
-        self.faculty_card_manager = get_faculty_card_manager()
-
-        # Track faculty data for efficient comparison
-        self._last_faculty_hash = None
-
-        # Loading state management
-        self._is_loading = False
-        self._loading_widget = None
-
-        # Log student info for debugging
-        if student:
-            # Handle both student object and student data dictionary
-            if isinstance(student, dict):
-                student_id = student.get('id', 'Unknown')
-                student_name = student.get('name', 'Unknown')
-                student_rfid = student.get('rfid_uid', 'Unknown')
-            else:
-                # Legacy support for student objects
-                student_id = getattr(student, 'id', 'Unknown')
-                student_name = getattr(student, 'name', 'Unknown')
-                student_rfid = getattr(student, 'rfid_uid', 'Unknown')
-            logger.info(f"Dashboard initialized with student: ID={student_id}, Name={student_name}, RFID={student_rfid}")
-        else:
-            logger.warning("Dashboard initialized without student information")
-
-        # Set up inactivity monitor for automatic logout (student users only)
-        self.inactivity_monitor = None
-        if student:  # Only enable for students, not admin users
-            self.setup_inactivity_monitor()
+        logger.info(f"Dashboard initialized with student: ID={student.get('id') if isinstance(student, dict) else getattr(student, 'id', 'Unknown')}, Name={student.get('name') if isinstance(student, dict) else getattr(student, 'name', 'Unknown')}, RFID={student.get('rfid') if isinstance(student, dict) else getattr(student, 'rfid', 'Unknown')}")
 
     def init_ui(self):
         """
@@ -1111,6 +1096,22 @@ class DashboardWindow(BaseWindow):
             logger.error(f"Error performing filter: {str(e)}")
             self._show_error_message(f"Filter error: {str(e)}")
 
+    def refresh_faculty_status_throttled(self):
+        """
+        Throttled version of refresh_faculty_status to prevent rapid refreshes that override real-time updates.
+        """
+        import time
+        current_time = time.time()
+        
+        # Check if minimum interval has passed since last refresh
+        if current_time - self._last_refresh_time < self._min_refresh_interval:
+            logger.info(f"⏱️ [THROTTLE] Skipping refresh - only {current_time - self._last_refresh_time:.1f}s since last refresh (min: {self._min_refresh_interval}s)")
+            return
+        
+        logger.info(f"🔄 [THROTTLE] Proceeding with throttled refresh - {current_time - self._last_refresh_time:.1f}s since last refresh")
+        self._last_refresh_time = current_time
+        self.refresh_faculty_status()
+
     def refresh_faculty_status(self):
         """
         Refresh faculty status with improved error handling and caching.
@@ -1226,8 +1227,9 @@ class DashboardWindow(BaseWindow):
         if isinstance(faculty_or_id, int):
             logger.info(f"show_consultation_form received faculty ID: {faculty_or_id}. Fetching object.")
             try:
-                from ..controllers import FacultyController # Local import to avoid circular dependency issues at module load
-                fc = FacultyController()
+                # 🔧 FIX: Use global Faculty Controller instead of creating new instance
+                from ..controllers.faculty_controller import get_faculty_controller
+                fc = get_faculty_controller()  # Use global controller with real-time updates
                 faculty_object = fc.get_faculty_by_id(faculty_or_id)
                 if not faculty_object:
                     logger.warning(f"Faculty with ID {faculty_or_id} not found by controller.")
@@ -1580,19 +1582,20 @@ class DashboardWindow(BaseWindow):
 
     def showEvent(self, event):
         """
-        Handle window show event to trigger initial faculty data loading.
+        Handle show event with initial faculty data loading.
         """
-        # Call parent showEvent first
         super().showEvent(event)
-
-        # Load faculty data immediately when the window is first shown
-        # Only do this if we haven't loaded faculty data yet
-        if not hasattr(self, '_initial_load_done') or not self._initial_load_done:
-            logger.info("Dashboard window shown - triggering initial faculty data load")
-            self._initial_load_done = True
-
-            # Schedule the initial faculty load after a short delay to ensure UI is ready
-            QTimer.singleShot(100, self._perform_initial_faculty_load)
+        
+        # Show loading indicator immediately
+        self._show_loading_indicator()
+        
+        logger.info("Dashboard window shown - triggering initial faculty data load")
+        
+        # 🔧 FIX: Delay initial faculty load to prevent overriding real-time updates
+        # Real-time MQTT messages might arrive during dashboard initialization
+        # Give them time to process and update the database before loading from DB
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(1000, self._perform_initial_faculty_load)  # 1 second delay
 
     def _perform_initial_faculty_load(self):
         """
@@ -1746,15 +1749,23 @@ class DashboardWindow(BaseWindow):
                 
             logger.info(f"🔄 Processing dashboard status update: Faculty {faculty_id} -> {new_status}")
                 
-            # Find and update the corresponding faculty card
-            card_updated = self.update_faculty_card_status(faculty_id, new_status)
+            # 🔧 FIX: Add small delay to prevent race condition with database updates
+            # The Faculty Controller needs time to commit database changes before UI updates
+            from PyQt5.QtCore import QTimer
+            
+            def delayed_update():
+                # Find and update the corresponding faculty card
+                card_updated = self.update_faculty_card_status(faculty_id, new_status)
 
-            # Only trigger a full refresh if the card wasn't found in the current view
-            if not card_updated:
-                logger.warning(f"❌ [UI FALLBACK] Faculty card for ID {faculty_id} not found, triggering full UI refresh")
-                self.request_ui_refresh.emit()
-            else:
-                logger.info(f"✅ [UI SUCCESS] Faculty card for ID {faculty_id} updated in place, no full refresh needed")
+                # Only trigger a full refresh if the card wasn't found in the current view
+                if not card_updated:
+                    logger.warning(f"❌ [UI FALLBACK] Faculty card for ID {faculty_id} not found, triggering full UI refresh")
+                    self.request_ui_refresh.emit()
+                else:
+                    logger.info(f"✅ [UI SUCCESS] Faculty card for ID {faculty_id} updated in place, no full refresh needed")
+            
+            # Delay UI update by 500ms to allow Faculty Controller database commit to complete
+            QTimer.singleShot(500, delayed_update)
             
         except Exception as e:
             logger.error(f"Error processing status update safely: {e}")
@@ -1796,17 +1807,24 @@ class DashboardWindow(BaseWindow):
                     converted_status = self._map_status_for_display(new_status)
                     logger.info(f"🎯 [DASHBOARD] Status conversion: {new_status} -> {converted_status}")
                     
-                    # Update the faculty card
-                    card_updated = self.update_faculty_card_status(faculty_id, converted_status)
-                    logger.info(f"🎯 [DASHBOARD] Faculty {faculty_id} status update result: card_updated={card_updated}")
+                    # 🔧 FIX: Add delay to prevent race condition - use delayed update
+                    from PyQt5.QtCore import QTimer
                     
-                    # System notifications are secondary to direct status updates
-                    # Only refresh if card wasn't found and updated in place
-                    if not card_updated:
-                        logger.info(f"🔄 [DASHBOARD] Faculty card for ID {faculty_id} not visible, triggering refresh")
-                        self.request_ui_refresh.emit()
-                    else:
-                        logger.info(f"✅ [DASHBOARD] Faculty card for ID {faculty_id} updated successfully")
+                    def delayed_system_update():
+                        # Update the faculty card
+                        card_updated = self.update_faculty_card_status(faculty_id, converted_status)
+                        logger.info(f"🎯 [DASHBOARD] Faculty {faculty_id} status update result: card_updated={card_updated}")
+                        
+                        # System notifications are secondary to direct status updates
+                        # Only refresh if card wasn't found and updated in place
+                        if not card_updated:
+                            logger.info(f"🔄 [DASHBOARD] Faculty card for ID {faculty_id} not visible, triggering refresh")
+                            self.request_ui_refresh.emit()
+                        else:
+                            logger.info(f"✅ [DASHBOARD] Faculty card for ID {faculty_id} updated successfully")
+                    
+                    # Delay by 750ms (longer than direct status updates) since system notifications are secondary
+                    QTimer.singleShot(750, delayed_system_update)
             
             # ✅ FIX: Handle faculty response notifications (BUSY, ACKNOWLEDGE, etc.)
             elif data.get('type') == 'faculty_response_received':
@@ -1821,15 +1839,22 @@ class DashboardWindow(BaseWindow):
                     display_status = self._map_status_for_display(new_status)
                     logger.info(f"🔧 [DASHBOARD] Faculty response status conversion: {new_status} -> {display_status}")
                     
-                    # Update the faculty card
-                    card_updated = self.update_faculty_card_status(faculty_id, display_status)
-                    logger.info(f"🔧 [DASHBOARD] Faculty response notification for faculty {faculty_id} processed, card_updated: {card_updated}")
+                    # Add delay for faculty response updates too
+                    from PyQt5.QtCore import QTimer
                     
-                    if not card_updated:
-                        logger.info(f"🔄 [DASHBOARD] Faculty card for ID {faculty_id} not found, triggering full refresh")
-                        self.request_ui_refresh.emit()
-                    else:
-                        logger.info(f"✅ [DASHBOARD] Faculty card for ID {faculty_id} updated successfully")
+                    def delayed_response_update():
+                        # Update the faculty card
+                        card_updated = self.update_faculty_card_status(faculty_id, display_status)
+                        logger.info(f"🔧 [DASHBOARD] Faculty response notification for faculty {faculty_id} processed, card_updated: {card_updated}")
+                        
+                        if not card_updated:
+                            logger.info(f"🔄 [DASHBOARD] Faculty card for ID {faculty_id} not found, triggering full refresh")
+                            self.request_ui_refresh.emit()
+                        else:
+                            logger.info(f"✅ [DASHBOARD] Faculty card for ID {faculty_id} updated successfully")
+                    
+                    # Delay by 500ms for faculty response updates
+                    QTimer.singleShot(500, delayed_response_update)
                         
         except Exception as e:
             logger.error(f"Error processing system notification safely: {e}")

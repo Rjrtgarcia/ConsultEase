@@ -347,7 +347,10 @@ void processNextQueuedConsultation() {
   if (isConsultationQueueEmpty()) {
     DEBUG_PRINTLN("📭 No more consultations in queue");
     currentMessageDisplayed = false;
-    updateMainDisplay(); // Return to normal display
+    
+    // Completely redraw the UI to ensure consultation headers are cleared
+    drawCompleteUI();
+    
     return;
   }
   
@@ -1873,13 +1876,13 @@ void clearCurrentMessageImmediately() {
   g_receivedConsultationId = "";
   currentMessageDisplayed = false;
   
-  // FORCE CLEAR THE SCREEN IMMEDIATELY
-  tft.fillRect(0, MAIN_AREA_Y, SCREEN_WIDTH, MAIN_AREA_HEIGHT, COLOR_WHITE);
+  // COMPLETELY REDRAW THE UI to remove consultation headers
+  drawCompleteUI();
   
   // Update LED status immediately
   updateMessageLED();
   
-  DEBUG_PRINTLN("✅ Message variables cleared and screen cleared immediately");
+  DEBUG_PRINTLN("✅ Message variables cleared and complete UI redrawn");
 }
 
 // ================================
@@ -2425,6 +2428,7 @@ void drawCompleteUI() {
 }
 
 void updateMainDisplay() {
+  // Clear the entire main area to remove any consultation headers
   tft.fillRect(0, MAIN_AREA_Y, SCREEN_WIDTH, MAIN_AREA_HEIGHT, COLOR_WHITE);
 
   if (presenceDetector.getPresence()) {
@@ -2824,22 +2828,28 @@ void handleCancellationNotification(String messageContent) {
   if (currentMessageDisplayed && g_receivedConsultationId.equals(consultationId)) {
     DEBUG_PRINTLN("🚫 Cancelling currently displayed consultation");
     
-    // Clear the current message
+    // Clear the current message state
     currentMessageDisplayed = false;
     messageDisplayed = false;
     g_receivedConsultationId = "";
     
-    // Show cancellation message
+    // Show cancellation message briefly
     tft.fillScreen(ST77XX_BLACK);
     displayCancelledConsultation(consultationId);
     
     // Process next message in queue after a short delay
     unsigned long cancelDisplayTime = millis();
-    while (millis() - cancelDisplayTime < 3000) {  // Show cancellation for 3 seconds
+    while (millis() - cancelDisplayTime < 2000) {  // Show cancellation for 2 seconds (reduced)
       delay(100);
     }
     
-    // Process next consultation in queue
+    // Clear screen completely and redraw complete UI
+    drawCompleteUI();
+    
+    // Update LED status
+    updateMessageLED();
+    
+    // Process next consultation in queue OR return to main screen
     processNextQueuedConsultation();
     
   } else {
