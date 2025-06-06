@@ -24,7 +24,7 @@ class AsyncMQTTService:
     Uses a background thread pool and message queuing for optimal performance on Raspberry Pi.
     """
 
-    def __init__(self, broker_host='localhost', broker_port=1883, username=None, password=None, max_queue_size=1000):
+    def __init__(self, broker_host='192.168.100.3', broker_port=1883, username=None, password=None, max_queue_size=1000):
         """
         Initialize the asynchronous MQTT service.
 
@@ -655,7 +655,7 @@ def get_async_mqtt_service() -> AsyncMQTTService:
         from ..utils.config_manager import get_config
 
         _async_mqtt_service = AsyncMQTTService(
-            broker_host=get_config('mqtt.broker_host', 'localhost'),
+            broker_host=get_config('mqtt.broker_host', '192.168.100.3'),
             broker_port=get_config('mqtt.broker_port', 1883),
             username=get_config('mqtt.username'),
             password=get_config('mqtt.password')

@@ -201,79 +201,57 @@ class FacultyResponseController:
 
     def _process_faculty_response(self, response_data: Dict[str, Any]) -> bool:
         """
-        Process faculty response and update consultation status.
+        Process faculty response and update consultation status with enhanced real-time support.
 
         Args:
-            response_data (dict): Faculty response data. Expected to contain:
-                                  'faculty_id': ID of the faculty responding (from payload)
-                                  'message_id': consultation_id being responded to
-                                  'response_type': e.g., "ACKNOWLEDGE", "REJECTED", "COMPLETED"
+            response_data (dict): Faculty response data
 
         Returns:
-            bool: True if processed successfully
+            bool: True if response was processed successfully
         """
         try:
-            faculty_id_from_payload = response_data.get('faculty_id')
+            faculty_id = response_data.get('faculty_id')
             response_type = response_data.get('response_type')
-            consultation_id_from_response = response_data.get('message_id')
+            message_id = response_data.get('message_id')
 
-            if not consultation_id_from_response:
-                logger.error("Faculty response missing 'message_id' (consultation_id).")
-                return False
-            
-            if not faculty_id_from_payload: # Also ensure faculty_id is in payload
-                logger.error("Faculty response missing 'faculty_id' in payload.")
+            logger.info(f"🔄 [FACULTY RESPONSE] Processing {response_type} response from faculty {faculty_id} for message {message_id}")
+
+            if not all([faculty_id, response_type, message_id]):
+                logger.error(f"❌ [FACULTY RESPONSE] Missing required fields in response data: {response_data}")
                 return False
 
-            # CRITICAL FIX: Convert consultation_id from string to integer
-            # ESP32 sends consultation_id as string, but database expects integer
-            try:
-                consultation_id_int = int(consultation_id_from_response)
-                logger.debug(f"Converted consultation_id from '{consultation_id_from_response}' (string) to {consultation_id_int} (int)")
-            except (ValueError, TypeError) as e:
-                logger.error(f"Invalid consultation_id format: '{consultation_id_from_response}' cannot be converted to integer: {e}")
-                return False
-
-            # CRITICAL FIX: Convert faculty_id from string to integer for comparison
-            try:
-                faculty_id_int = int(faculty_id_from_payload)
-                logger.debug(f"Converted faculty_id from '{faculty_id_from_payload}' (string) to {faculty_id_int} (int)")
-            except (ValueError, TypeError) as e:
-                logger.error(f"Invalid faculty_id format: '{faculty_id_from_payload}' cannot be converted to integer: {e}")
-                return False
-
+            # Get consultation from database
             db = get_db()
             try:
-                # Use the converted integer consultation_id for database query
-                consultation = db.query(Consultation).filter(Consultation.id == consultation_id_int).first()
+                consultation = db.query(Consultation).filter(
+                    Consultation.id == int(message_id)
+                ).first()
 
                 if not consultation:
-                    logger.warning(f"Consultation ID {consultation_id_int} (converted from '{consultation_id_from_response}') not found in database.")
+                    logger.error(f"❌ [FACULTY RESPONSE] Consultation {message_id} not found")
                     return False
 
-                # Verification - compare as integers
-                if consultation.faculty_id != faculty_id_int:
-                    logger.warning(f"Faculty ID mismatch for consultation {consultation.id}. "
-                                   f"Response payload for faculty {faculty_id_int} (converted from '{faculty_id_from_payload}'), "
-                                   f"but consultation belongs to faculty {consultation.faculty_id}. Ignoring response.")
-                    return False
+                # Check if consultation is in a state that can be responded to
+                if consultation.status not in [ConsultationStatus.PENDING]:
+                    logger.warning(f"⚠️ [FACULTY RESPONSE] Consultation {message_id} is not pending (status: {consultation.status.value})")
+                    # Still process the response for logging purposes
+                    
+                logger.info(f"📋 [FACULTY RESPONSE] Processing response '{response_type}' for {consultation.status.value} consultation {message_id}")
 
-                if consultation.status != ConsultationStatus.PENDING:
-                    logger.warning(f"Consultation {consultation.id} is no longer PENDING (current status: {consultation.status.value}). "
-                                   f"Response '{response_type}' may be late or redundant. Ignoring response.")
-                    return False
-
-                logger.info(f"Processing response '{response_type}' for PENDING consultation {consultation.id} (Faculty: {consultation.faculty_id})")
-
-                new_status_enum: Optional[ConsultationStatus] = None
+                # Map response types to consultation statuses
+                new_status_enum = None
                 if response_type == "ACKNOWLEDGE" or response_type == "ACCEPTED":
                     new_status_enum = ConsultationStatus.ACCEPTED
+                    logger.info(f"✅ [FACULTY RESPONSE] Mapping ACKNOWLEDGE/ACCEPTED to ACCEPTED status")
                 elif response_type == "BUSY" or response_type == "UNAVAILABLE":
                     new_status_enum = ConsultationStatus.BUSY
-                elif response_type == "REJECTED" or response_type == "DECLINED": # Allow "DECLINED"
+                    logger.info(f"⏰ [FACULTY RESPONSE] Mapping BUSY/UNAVAILABLE to BUSY status")
+                elif response_type == "REJECTED" or response_type == "DECLINED":
                     new_status_enum = ConsultationStatus.CANCELLED
+                    logger.info(f"❌ [FACULTY RESPONSE] Mapping REJECTED/DECLINED to CANCELLED status")
                 elif response_type == "COMPLETED":
                     new_status_enum = ConsultationStatus.COMPLETED
+                    logger.info(f"✅ [FACULTY RESPONSE] Mapping COMPLETED to COMPLETED status")
 
                 if new_status_enum:
                     # Store consultation details before updating for real-time notifications
@@ -290,39 +268,43 @@ class FacultyResponseController:
                         'response_type': response_type
                     }
                     
-                    # Import ConsultationController locally or ensure it's available via __init__
+                    logger.info(f"🔄 [FACULTY RESPONSE] Updating consultation {consultation.id} from {consultation_details['old_status']} to {consultation_details['new_status']}")
+                    
+                    # Import ConsultationController locally to avoid circular imports
                     from .consultation_controller import ConsultationController as SystemConsultationController
                     cc = SystemConsultationController()
                     updated_consultation = cc.update_consultation_status(consultation.id, new_status_enum)
                     
                     if updated_consultation:
-                        logger.info(f"✅ Successfully updated consultation {consultation.id} to status {new_status_enum.value} via ConsultationController.")
+                        logger.info(f"✅ [FACULTY RESPONSE] Successfully updated consultation {consultation.id} to status {new_status_enum.value}")
                         
-                        # Publish real-time faculty response notifications
+                        # Publish comprehensive real-time faculty response notifications
                         self._publish_faculty_response_notification(consultation_details)
                         
                         # Add consultation_id and student_id to response_data for callbacks, if not already there
                         response_data['consultation_id'] = consultation.id 
                         response_data['student_id'] = consultation.student_id
+                        
+                        logger.info(f"✅ [FACULTY RESPONSE] {response_type} response for consultation {consultation.id} processed successfully")
                         return True
                     else:
-                        logger.error(f"Failed to update consultation {consultation.id} to {new_status_enum.value} using ConsultationController.")
+                        logger.error(f"❌ [FACULTY RESPONSE] Failed to update consultation {consultation.id} to {new_status_enum.value}")
                         return False
                 else:
-                    logger.warning(f"Unknown or unhandled response_type: '{response_type}' for consultation {consultation.id}. Status not changed.")
+                    logger.warning(f"⚠️ [FACULTY RESPONSE] Unknown or unhandled response_type: '{response_type}' for consultation {consultation.id}")
                     return False
             finally:
                 db.close()
 
         except Exception as e:
-            logger.error(f"Critical error in _process_faculty_response: {str(e)}")
+            logger.error(f"❌ [FACULTY RESPONSE] Critical error in _process_faculty_response: {str(e)}")
             import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"❌ [FACULTY RESPONSE] Traceback: {traceback.format_exc()}")
             return False
 
     def _publish_faculty_response_notification(self, consultation_details):
         """
-        Publish real-time faculty response notifications to all relevant parties.
+        Publish comprehensive real-time faculty response notifications to all relevant parties.
         
         Args:
             consultation_details (dict): Consultation details for notifications
@@ -332,6 +314,8 @@ class FacultyResponseController:
             import datetime
             
             timestamp = datetime.datetime.now().isoformat()
+            
+            logger.info(f"📤 [FACULTY RESPONSE] Publishing notifications for consultation {consultation_details['id']} ({consultation_details['response_type']})")
             
             # 1. Notify the central system for real-time UI updates
             ui_update_topic = "consultease/ui/consultation_updates"
@@ -391,17 +375,22 @@ class FacultyResponseController:
                 qos=0
             )
             
-            logger.info(
-                f"Faculty response notifications sent - "
-                f"UI: {publish_success_ui}, "
-                f"Student: {publish_success_student}, "
-                f"System: {publish_success_system}"
-            )
+            # Enhanced logging for debugging
+            logger.info(f"📤 [FACULTY RESPONSE] Notification results:")
+            logger.info(f"   📱 UI Update ({ui_update_topic}): {'✅ SUCCESS' if publish_success_ui else '❌ FAILED'}")
+            logger.info(f"   👤 Student Notification ({student_notification_topic}): {'✅ SUCCESS' if publish_success_student else '❌ FAILED'}")
+            logger.info(f"   🌐 System Notification ({system_notification_topic}): {'✅ SUCCESS' if publish_success_system else '❌ FAILED'}")
+            
+            # Overall success check
+            if publish_success_ui or publish_success_student or publish_success_system:
+                logger.info(f"✅ [FACULTY RESPONSE] At least one notification published successfully for {consultation_details['response_type']} response")
+            else:
+                logger.error(f"❌ [FACULTY RESPONSE] All notification publishing failed for {consultation_details['response_type']} response")
             
         except Exception as e:
-            logger.error(f"Error publishing faculty response notifications: {str(e)}")
+            logger.error(f"❌ [FACULTY RESPONSE] Error publishing faculty response notifications: {str(e)}")
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f"❌ [FACULTY RESPONSE] Traceback: {traceback.format_exc()}")
 
     def get_response_statistics(self) -> Dict[str, Any]:
         """

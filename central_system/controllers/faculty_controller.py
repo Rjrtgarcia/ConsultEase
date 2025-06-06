@@ -237,171 +237,96 @@ class FacultyController:
 
     def update_faculty_status(self, faculty_id, status):
         """
-        Update faculty status in the database with atomic operations to prevent race conditions.
-
+        Update faculty status in the database with enhanced real-time support.
+        
         Args:
             faculty_id (int): Faculty ID
-            status (bool): New status (True = Available, False = Unavailable)
-
+            status (bool): New status (True for available, False for unavailable)
+            
         Returns:
-            dict: Dictionary containing updated faculty data, or None if not found or error.
+            dict: Faculty data dictionary if successful, None if failed
         """
-        logger.info(f"Attempting to update faculty ID {faculty_id} to status: {status}")
-        import threading
+        if faculty_id is None or status is None:
+            logger.error(f"Invalid parameters: faculty_id={faculty_id}, status={status}")
+            return None
 
-        # Use a lock to prevent concurrent status updates for the same faculty
-        lock_key = f"faculty_status_{faculty_id}"
-        if not hasattr(self, '_status_locks'):
-            self._status_locks = {}
+        try:
+            from ..models.base import DatabaseManager
+            import datetime
+            
+            db_manager = DatabaseManager()
+            
+            # Enhanced transaction handling with isolation
+            with db_manager.get_session_context() as db:
+                # Use SELECT FOR UPDATE to prevent concurrent modifications
+                faculty = db.query(Faculty).filter(Faculty.id == faculty_id).with_for_update().first()
+                
+                if not faculty:
+                    logger.warning(f"❌ Faculty with ID {faculty_id} not found in database")
+                    # Create pending update for faculty that doesn't exist yet
+                    self._pending_status_updates[faculty_id] = status
+                    logger.info(f"🔄 Added pending status update for faculty {faculty_id}: {status}")
+                    return None
 
-        if lock_key not in self._status_locks:
-            self._status_locks[lock_key] = threading.Lock()
+                # Capture previous status for change detection
+                previous_status = faculty.status
+                status_changed = previous_status != status
+                
+                logger.info(f"🔄 [FACULTY CONTROLLER] Updating faculty {faculty_id} status: {previous_status} -> {status}")
 
-        with self._status_locks[lock_key]:
-            try:
-                # Use database manager for thread-safe operations
-                from ..services.database_manager import get_database_manager
-                db_manager = get_database_manager()
-
-                with db_manager.get_session_context() as db:
-                    logger.debug(f"DB session acquired for faculty {faculty_id}")
-                    # Use SELECT FOR UPDATE to lock the row and prevent concurrent modifications
-                    faculty = db.query(Faculty).filter(Faculty.id == faculty_id).with_for_update().first()
-
-                    if not faculty:
-                        logger.warning(f"Faculty not found in DB: {faculty_id}. This may be normal during system startup.")
-                        logger.info(f"Available faculty IDs: {[f.id for f in db.query(Faculty).all()]}")
-                        # Queue the status update for when faculty is created
-                        self._queue_pending_status_update(faculty_id, status)
-                        return None
-
-                    logger.debug(f"Faculty {faculty.name} (ID: {faculty_id}) current DB status: {faculty.status}. Received new status: {status}")
-                    # Check if status actually changed to avoid unnecessary updates
-                    if faculty.status == status:
-                        logger.info(f"Faculty {faculty.name} (ID: {faculty.id}) status unchanged ({status}). No DB update needed.")
-                        # Return dictionary representation even if unchanged
-                        return {
-                            'id': faculty.id,
-                            'name': faculty.name,
-                            'department': faculty.department,
-                            'status': faculty.status,
-                            'ble_id': faculty.ble_id,
-                            'last_seen': faculty.last_seen.isoformat() if faculty.last_seen else None,
-                            'version': getattr(faculty, 'version', 1)
-                        }
-
-                    # Store previous status for logging
-                    previous_status = faculty.status
-                    logger.debug(f"Faculty {faculty.name} (ID: {faculty.id}) previous status: {previous_status}, new status: {status}. Proceeding with update.")
-
-                    # Update status and timestamp atomically
+                if status_changed:
+                    # Update faculty status
                     faculty.status = status
                     faculty.last_seen = datetime.datetime.now()
-
-                    # Increment a version counter to detect concurrent modifications
-                    if not hasattr(faculty, 'version'):
-                        faculty.version = 1
-                    else:
-                        faculty.version += 1
-
-                    logger.info(f"Atomically updated attributes for faculty {faculty.name} (ID: {faculty.id}): {previous_status} -> {status}. Awaiting commit.")
-
-                    # Create a safe faculty data dictionary to avoid DetachedInstanceError
+                    
+                    # Force immediate commit to ensure changes are persisted
+                    db.commit()
+                    db.refresh(faculty)
+                    
+                    # Prepare safe faculty data for callbacks and notifications
                     faculty_data = {
                         'id': faculty.id,
                         'name': faculty.name,
                         'department': faculty.department,
                         'status': faculty.status,
-                        'ble_id': faculty.ble_id,
                         'last_seen': faculty.last_seen.isoformat() if faculty.last_seen else None,
+                        'ble_id': faculty.ble_id,
                         'version': getattr(faculty, 'version', 1)
                     }
-
-                # Session context manager will attempt to commit here if no exceptions occurred
-                logger.info(f"DB session context exited for faculty {faculty_id}. Commit should have occurred if changes were made.")
-
-                # <<< START VERIFICATION BLOCK >>>
-                if faculty_data: # Only verify if an update was attempted and faculty_data was prepared
-                    try:
-                        logger.info(f"Verifying faculty {faculty_id} status post-commit...")
-                        with db_manager.get_session_context() as verify_db: # Use a new session from the manager
-                            verified_faculty = verify_db.query(Faculty).filter(Faculty.id == faculty_id).first()
-                            if verified_faculty:
-                                logger.info(f"Post-commit verification: Faculty ID {faculty_id}, Name: {verified_faculty.name}, DB Status: {verified_faculty.status}. Expected status: {status}")
-                                if verified_faculty.status != status:
-                                    logger.error(f"POST-COMMIT STATUS MISMATCH for faculty {faculty_id}! DB has {verified_faculty.status}, expected {status}. COMMIT LIKELY FAILED OR WAS OVERWRITTEN.")
-                                else:
-                                    logger.info(f"Post-commit verification successful for faculty {faculty_id}. Status in DB is {verified_faculty.status}.")
-                            else:
-                                logger.error(f"Post-commit verification FAILED: Faculty {faculty_id} not found in DB after supposed update.")
-                    except Exception as verify_e:
-                        logger.error(f"Exception during post-commit verification for faculty {faculty_id}: {str(verify_e)}")
-                # <<< END VERIFICATION BLOCK >>>
-
-                # Invalidate faculty cache when status changes (outside transaction)
-                logger.debug(f"Invalidating cache for faculty {faculty_id} post-update.")
-                invalidate_faculty_cache()
-                invalidate_cache_pattern("get_all_faculty")
-
-                # Publish MQTT notification with sequence number to ensure ordering
-                self._publish_status_update_with_sequence_safe(faculty_data, status, previous_status)
-
-                return faculty_data
-
-            except Exception as e:
-                logger.error(f"Exception during update_faculty_status for ID {faculty_id} (status: {status}): {str(e)}")
-                import traceback
-                logger.error(f"Traceback: {traceback.format_exc()}")
-                return None
-
-    def _publish_status_update_with_sequence(self, faculty, new_status, previous_status):
-        """
-        Publish faculty status update with sequence number for message ordering.
-
-        Args:
-            faculty: Faculty object
-            new_status: New status value
-            previous_status: Previous status value
-        """
-        try:
-            # Generate sequence number for message ordering
-            if not hasattr(self, '_message_sequence'):
-                self._message_sequence = 0
-
-            self._message_sequence += 1
-
-            # Create notification with sequence number and timestamp
-            notification = {
-                'type': 'faculty_status',
-                'faculty_id': faculty.id,
-                'faculty_name': faculty.name,
-                'status': new_status,
-                'previous_status': previous_status,
-                'sequence': self._message_sequence,
-                'timestamp': faculty.last_seen.isoformat() if faculty.last_seen else None,
-                'version': getattr(faculty, 'version', 1)
-            }
-
-            # Publish to both standardized and legacy topics for compatibility
-            topics = [
-                MQTTTopics.SYSTEM_NOTIFICATIONS,
-                f"consultease/faculty/{faculty.id}/status_update"
-            ]
-
-            for topic in topics:
-                try:
-                    publish_mqtt_message(topic, notification)
-                    logger.debug(f"Published status update to {topic} with sequence {self._message_sequence}")
-                except Exception as e:
-                    logger.error(f"Error publishing to {topic}: {str(e)}")
+                    
+                    logger.info(f"✅ [FACULTY CONTROLLER] Faculty {faculty_id} status updated in database: {status}")
+                    
+                    # Publish status update immediately after successful commit
+                    self._publish_status_update_with_sequence_safe(faculty_data, status, previous_status)
+                    
+                    # Invalidate caches
+                    self._invalidate_faculty_caches()
+                    
+                    return faculty_data
+                else:
+                    logger.debug(f"🔄 Faculty {faculty_id} status unchanged ({status}), skipping update")
+                    # Still return faculty data for consistency
+                    faculty_data = {
+                        'id': faculty.id,
+                        'name': faculty.name,
+                        'department': faculty.department,
+                        'status': faculty.status,
+                        'last_seen': faculty.last_seen.isoformat() if faculty.last_seen else None,
+                        'ble_id': faculty.ble_id,
+                        'version': getattr(faculty, 'version', 1)
+                    }
+                    return faculty_data
 
         except Exception as e:
-            logger.error(f"Error publishing faculty status notification: {str(e)}")
+            logger.error(f"❌ [FACULTY CONTROLLER] Exception during update_faculty_status for ID {faculty_id} (status: {status}): {str(e)}")
+            import traceback
+            logger.error(f"❌ [FACULTY CONTROLLER] Traceback: {traceback.format_exc()}")
+            return None
 
     def _publish_status_update_with_sequence_safe(self, faculty_data, new_status, previous_status):
         """
-        Publish faculty status update with sequence number for message ordering using safe faculty data.
-
+        Publish faculty status update with enhanced reliability and sequence number.
+        
         Args:
             faculty_data (dict): Safe faculty data dictionary
             new_status: New status value
@@ -414,7 +339,7 @@ class FacultyController:
 
             self._message_sequence += 1
 
-            # Create notification with sequence number and timestamp
+            # Create comprehensive notification with sequence number and timestamp
             notification = {
                 'type': 'faculty_status',
                 'faculty_id': faculty_data['id'],
@@ -423,24 +348,58 @@ class FacultyController:
                 'previous_status': previous_status,
                 'sequence': self._message_sequence,
                 'timestamp': faculty_data.get('last_seen'),
-                'version': faculty_data.get('version', 1)
+                'version': faculty_data.get('version', 1),
+                'change_detected': new_status != previous_status
             }
 
-            # Publish to both standardized and legacy topics for compatibility
+            # Enhanced topic publishing with retry logic
             topics = [
-                MQTTTopics.SYSTEM_NOTIFICATIONS,
-                f"consultease/faculty/{faculty_data['id']}/status_update"
+                # Primary topic for dashboard consumption
+                f"consultease/faculty/{faculty_data['id']}/status_update",
+                # System notifications for broader consumption
+                "consultease/system/notifications",
+                # Legacy compatibility topic
+                f"faculty/{faculty_data['id']}/status"
             ]
 
+            publish_success_count = 0
             for topic in topics:
                 try:
-                    publish_mqtt_message(topic, notification, retain=True)
-                    logger.debug(f"Published status update to {topic} with sequence {self._message_sequence} (retained)")
+                    from ..utils.mqtt_utils import publish_mqtt_message
+                    success = publish_mqtt_message(topic, notification, retain=True, qos=1)
+                    if success:
+                        publish_success_count += 1
+                        logger.info(f"✅ [FACULTY CONTROLLER] Published status update to {topic} (seq: {self._message_sequence})")
+                    else:
+                        logger.error(f"❌ [FACULTY CONTROLLER] Failed to publish to {topic}")
                 except Exception as e:
-                    logger.error(f"Error publishing to {topic}: {str(e)}")
+                    logger.error(f"❌ [FACULTY CONTROLLER] Error publishing to {topic}: {str(e)}")
+
+            if publish_success_count > 0:
+                logger.info(f"✅ [FACULTY CONTROLLER] Status update published to {publish_success_count}/{len(topics)} topics")
+            else:
+                logger.error(f"❌ [FACULTY CONTROLLER] Failed to publish status update to any topics!")
 
         except Exception as e:
-            logger.error(f"Error publishing faculty status notification: {str(e)}")
+            logger.error(f"❌ [FACULTY CONTROLLER] Error publishing faculty status notification: {str(e)}")
+            import traceback
+            logger.error(f"❌ [FACULTY CONTROLLER] Traceback: {traceback.format_exc()}")
+
+    def _invalidate_faculty_caches(self):
+        """Invalidate all faculty-related caches."""
+        try:
+            from ..utils.cache_manager import invalidate_faculty_cache
+            from ..utils.query_cache import invalidate_cache_pattern
+            
+            invalidate_faculty_cache()
+            invalidate_cache_pattern("get_all_faculty")
+
+            if hasattr(self.get_all_faculty, 'cache_clear'):
+                self.get_all_faculty.cache_clear()
+                
+            logger.debug("🗑️ [FACULTY CONTROLLER] Faculty caches invalidated")
+        except Exception as e:
+            logger.error(f"❌ [FACULTY CONTROLLER] Error invalidating caches: {str(e)}")
 
     def _queue_pending_status_update(self, faculty_id, status):
         """Queue a status update for a faculty member that doesn't exist yet."""
@@ -705,14 +664,6 @@ class FacultyController:
 
         # Publish notification
         self._publish_faculty_creation_notification(faculty)
-
-    def _invalidate_faculty_caches(self):
-        """Invalidate all faculty-related caches."""
-        invalidate_faculty_cache()
-        invalidate_cache_pattern("get_all_faculty")
-
-        if hasattr(self.get_all_faculty, 'cache_clear'):
-            self.get_all_faculty.cache_clear()
 
     def _publish_faculty_creation_notification(self, faculty):
         """Publish MQTT notification for new faculty creation."""

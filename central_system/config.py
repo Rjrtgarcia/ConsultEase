@@ -28,7 +28,7 @@ class Config:
             "pool_recycle": 1800
         },
         "mqtt": {
-            "broker_host": "localhost",
+            "broker_host": "192.168.100.3",
             "broker_port": 1883,
             "use_tls": False,
             "username": "",

@@ -200,6 +200,8 @@ class PooledFacultyCard(QWidget):
         Args:
             status: Faculty status (string or boolean)
         """
+        logger.info(f"🟢 [STATUS INDICATOR] Updating indicator for status: {status} (type: {type(status)})")
+        
         # Ensure status is a string and handle edge cases
         if not isinstance(status, str):
             if isinstance(status, bool):
@@ -216,10 +218,19 @@ class PooledFacultyCard(QWidget):
         }
 
         color = status_colors.get(status.lower(), '#9E9E9E')
-        self.status_widget.setStyleSheet(f"""
+        old_style = self.status_widget.styleSheet()
+        new_style = f"""
             background-color: {color};
             border-radius: 6px;
-        """)
+        """
+        
+        logger.info(f"🟢 [STATUS INDICATOR] Color mapping: {status.lower()} -> {color}")
+        logger.info(f"🟢 [STATUS INDICATOR] Old style: {old_style}")
+        logger.info(f"🟢 [STATUS INDICATOR] New style: {new_style}")
+        
+        self.status_widget.setStyleSheet(new_style)
+        self.status_widget.update()
+        logger.info(f"🟢 [STATUS INDICATOR] Applied new style and forced update")
 
     def _on_consult_clicked(self):
         """Handle consultation button click."""
@@ -282,33 +293,51 @@ class PooledFacultyCard(QWidget):
         Args:
             new_status: New status (string or boolean)
         """
-        if self.faculty_data:
-            # Handle both boolean and string status
-            if isinstance(new_status, bool):
-                status_str = 'available' if new_status else 'offline'
-                self.faculty_data['status'] = status_str
-                self.faculty_data['available'] = new_status  # Also update available field
-            elif isinstance(new_status, str):
-                status_str = new_status
-                self.faculty_data['status'] = status_str
-                # Update available field based on status string
-                self.faculty_data['available'] = status_str.lower() == 'available'
-            else:
-                # Fallback
-                status_str = 'offline'
-                self.faculty_data['status'] = status_str
-                self.faculty_data['available'] = False
+        if not self.faculty_data:
+            logger.error(f"🔴 [CARD UPDATE] Cannot update status - no faculty_data available")
+            return
             
-            self._update_status_indicator(status_str)
+        logger.info(f"🎯 [CARD UPDATE] Updating card status for faculty {self.faculty_data.get('id')} from {self.faculty_data.get('status')} to {new_status}")
+        
+        # Handle both boolean and string status
+        if isinstance(new_status, bool):
+            status_str = 'available' if new_status else 'offline'
+            self.faculty_data['status'] = status_str
+            self.faculty_data['available'] = new_status  # Also update available field
+        elif isinstance(new_status, str):
+            status_str = new_status
+            self.faculty_data['status'] = status_str
+            # Update available field based on status string
+            self.faculty_data['available'] = status_str.lower() == 'available'
+        else:
+            # Fallback
+            status_str = 'offline'
+            self.faculty_data['status'] = status_str
+            self.faculty_data['available'] = False
+        
+        logger.info(f"🎯 [CARD UPDATE] Converted status: {new_status} -> {status_str}, available: {self.faculty_data.get('available')}")
+        
+        # Update status indicator
+        self._update_status_indicator(status_str)
+        logger.info(f"🔴 [CARD UPDATE] Called _update_status_indicator({status_str})")
 
-            # Update button state
-            is_available = self.faculty_data.get('available', False)
-            self.consult_button.setEnabled(is_available)
+        # Update button state
+        is_available = self.faculty_data.get('available', False)
+        self.consult_button.setEnabled(is_available)
+        logger.info(f"🔵 [CARD UPDATE] Button enabled: {is_available}")
 
-            if not is_available:
-                self.consult_button.setText("Not Available")
-            else:
-                self.consult_button.setText("Request Consultation")
+        if not is_available:
+            self.consult_button.setText("Not Available")
+            logger.info(f"🔵 [CARD UPDATE] Button text set to 'Not Available'")
+        else:
+            self.consult_button.setText("Request Consultation")
+            logger.info(f"🔵 [CARD UPDATE] Button text set to 'Request Consultation'")
+            
+        # Force widget updates
+        self.status_widget.update()
+        self.consult_button.update() 
+        self.update()
+        logger.info(f"🔴 [CARD UPDATE] Forced widget updates and repaint")
 
 
 class FacultyCardManager:

@@ -1274,11 +1274,11 @@ class ConsultationPanel(QTabWidget):
 
     def setup_realtime_consultation_updates(self):
         """
-        Set up real-time consultation update subscriptions.
+        Set up real-time consultation update subscriptions with enhanced reliability.
         """
         # Prevent multiple subscriptions
         if hasattr(self, '_mqtt_subscriptions_setup') and self._mqtt_subscriptions_setup:
-            logger.debug("MQTT subscriptions already set up for this consultation panel, skipping")
+            logger.debug("🔧 [CONSULTATION PANEL] MQTT subscriptions already set up, skipping")
             return
             
         try:
@@ -1286,17 +1286,23 @@ class ConsultationPanel(QTabWidget):
             
             # Check if MQTT is connected before subscribing
             if not is_mqtt_connected():
-                logger.warning("⚠️ MQTT not connected yet, will retry subscription setup later")
+                logger.warning("⚠️ [CONSULTATION PANEL] MQTT not connected yet, will retry subscription setup later")
                 # Retry after a short delay
                 QTimer.singleShot(2000, self.setup_realtime_consultation_updates)
                 return
             
-            logger.info("🔧 Setting up real-time consultation update subscriptions...")
+            logger.info("🔧 [CONSULTATION PANEL] Setting up real-time consultation update subscriptions...")
             
-            # Subscribe to UI consultation updates
+            # Subscribe to UI consultation updates with enhanced handler
             success_ui = subscribe_to_topic(
                 "consultease/ui/consultation_updates",
                 self.handle_realtime_consultation_update
+            )
+            
+            # Subscribe to system notifications for backup/redundancy
+            success_system = subscribe_to_topic(
+                "consultease/system/notifications",
+                self.handle_system_notification_backup
             )
             
             # Subscribe to student-specific notifications if we have a student
@@ -1309,45 +1315,100 @@ class ConsultationPanel(QTabWidget):
                         student_topic,
                         self.handle_student_notification
                     )
-                    logger.info(f"📬 Subscribed to student-specific topic: {student_topic}")
+                    logger.info(f"📬 [CONSULTATION PANEL] Subscribed to student-specific topic: {student_topic}")
             
-            if success_ui and success_student:
+            if success_ui and success_student and success_system:
                 # Mark as set up to prevent duplicate subscriptions
                 self._mqtt_subscriptions_setup = True
-                logger.info("✅ Set up real-time consultation update subscriptions successfully")
+                logger.info("✅ [CONSULTATION PANEL] Set up real-time consultation update subscriptions successfully")
+                logger.info(f"   📱 UI Updates: consultease/ui/consultation_updates")
+                logger.info(f"   🌐 System Notifications: consultease/system/notifications")
+                if self.student:
+                    student_id = self.student.get('id') if isinstance(self.student, dict) else getattr(self.student, 'id', None)
+                    if student_id:
+                        logger.info(f"   👤 Student Notifications: consultease/student/{student_id}/notifications")
             else:
-                logger.error("❌ Failed to set up some MQTT subscriptions")
+                logger.error("❌ [CONSULTATION PANEL] Failed to set up some MQTT subscriptions")
+                logger.error(f"   UI: {'✅' if success_ui else '❌'}, System: {'✅' if success_system else '❌'}, Student: {'✅' if success_student else '❌'}")
             
         except Exception as e:
-            logger.error(f"❌ Failed to set up real-time consultation updates: {str(e)}")
+            logger.error(f"❌ [CONSULTATION PANEL] Failed to set up real-time consultation updates: {str(e)}")
             import traceback
-            logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            logger.error(f"❌ [CONSULTATION PANEL] Traceback: {traceback.format_exc()}")
+
+    def handle_system_notification_backup(self, topic, data):
+        """
+        Handle system notifications as backup for consultation updates.
+        
+        Args:
+            topic (str): MQTT topic
+            data (dict): Notification data
+        """
+        try:
+            if not isinstance(data, dict):
+                return
+                
+            notification_type = data.get('type')
+            
+            # Handle faculty response notifications as backup
+            if notification_type == 'faculty_response_received':
+                consultation_id = data.get('consultation_id')
+                student_id = data.get('student_id')
+                new_status = data.get('new_status')
+                response_type = data.get('response_type')
+                
+                if consultation_id and new_status:
+                    logger.info(f"🔄 [CONSULTATION PANEL] Backup notification: consultation {consultation_id} -> {new_status} ({response_type})")
+                    
+                    # Check if this is for our student
+                    current_student_id = None
+                    if self.student:
+                        current_student_id = self.student.get('id') if isinstance(self.student, dict) else getattr(self.student, 'id', None)
+                    
+                    if current_student_id == student_id or not current_student_id:
+                        # Use QTimer.singleShot to ensure UI updates happen on main thread
+                        QTimer.singleShot(0, lambda: self._process_consultation_update_safe(consultation_id, new_status, 'system_backup', data))
+                        
+        except Exception as e:
+            logger.error(f"❌ [CONSULTATION PANEL] Error handling system notification backup: {str(e)}")
 
     def handle_realtime_consultation_update(self, topic, data):
         """
-        Handle real-time consultation status updates.
+        Handle real-time consultation status updates with enhanced debugging.
         
         Args:
             topic (str): MQTT topic
             data (dict): Update data
         """
         try:
-            logger.info(f"🔔 [CONSULTATION PANEL] Received real-time consultation update from topic '{topic}': {data}")
+            logger.info(f"🔔 [CONSULTATION PANEL] Received real-time consultation update from topic '{topic}'")
+            logger.info(f"🔍 [CONSULTATION PANEL] Update data: {data}")
+            
+            # Validate data structure
+            if not isinstance(data, dict):
+                logger.error(f"❌ [CONSULTATION PANEL] Invalid data type: expected dict, got {type(data)}")
+                return
             
             # Extract update information
             update_type = data.get('type')
             consultation_id = data.get('consultation_id')
             student_id = data.get('student_id')
             new_status = data.get('new_status')
+            response_type = data.get('response_type', 'unknown')
             trigger = data.get('trigger', 'unknown')
             
-            logger.info(f"🔍 [CONSULTATION PANEL] Extracted data: consultation_id={consultation_id}, student_id={student_id}, new_status={new_status}, trigger={trigger}")
+            logger.info(f"🔍 [CONSULTATION PANEL] Extracted: consultation_id={consultation_id}, student_id={student_id}, new_status={new_status}, response_type={response_type}, trigger={trigger}")
+            
+            # Validate required fields
+            if not consultation_id or not new_status:
+                logger.error(f"❌ [CONSULTATION PANEL] Missing required fields: consultation_id={consultation_id}, new_status={new_status}")
+                return
             
             # Debug current student information
             current_student_id = None
             if self.student:
                 current_student_id = self.student.get('id') if isinstance(self.student, dict) else getattr(self.student, 'id', None)
-                logger.info(f"🎓 [CONSULTATION PANEL] Current student: {self.student} -> extracted ID: {current_student_id}")
+                logger.info(f"🎓 [CONSULTATION PANEL] Current student: ID={current_student_id}")
             else:
                 logger.warning(f"⚠️ [CONSULTATION PANEL] No current student set!")
             
@@ -1366,6 +1427,10 @@ class ConsultationPanel(QTabWidget):
                 should_process_update = False
             
             if should_process_update:
+                # CRITICAL: Handle BUSY status specifically
+                if response_type == "BUSY" or new_status == "busy":
+                    logger.info(f"⏰ [CONSULTATION PANEL] BUSY response detected - ensuring real-time update")
+                
                 # Use QTimer.singleShot to ensure UI updates happen on main thread
                 QTimer.singleShot(0, lambda: self._process_consultation_update_safe(consultation_id, new_status, trigger, data))
                 
@@ -1376,7 +1441,7 @@ class ConsultationPanel(QTabWidget):
 
     def _process_consultation_update_safe(self, consultation_id, new_status, trigger, data):
         """
-        Process consultation update safely on the main thread.
+        Process consultation update safely on the main thread with enhanced BUSY handling.
         
         Args:
             consultation_id (int): Consultation ID
@@ -1387,8 +1452,18 @@ class ConsultationPanel(QTabWidget):
         try:
             logger.info(f"🔄 [CONSULTATION PANEL] Processing consultation update safely: {consultation_id} -> {new_status} (trigger: {trigger})")
             
-            # Update the history panel immediately
-            self.refresh_consultation_history_realtime(consultation_id, new_status, trigger)
+            # Special handling for BUSY status
+            if new_status == "busy":
+                logger.info(f"⏰ [CONSULTATION PANEL] BUSY status update detected - forcing immediate history refresh")
+            
+            # Update the history panel immediately with real-time update
+            update_success = self.refresh_consultation_history_realtime(consultation_id, new_status, trigger)
+            
+            if not update_success:
+                logger.warning(f"⚠️ [CONSULTATION PANEL] Real-time update failed, triggering full refresh as fallback")
+                # Fallback to full refresh if real-time update fails
+                if hasattr(self, 'history_panel') and self.history_panel:
+                    QTimer.singleShot(100, self.history_panel.refresh_consultations)
             
             # Show notification based on update type
             self.show_consultation_update_notification(data)
@@ -1489,6 +1564,9 @@ class ConsultationPanel(QTabWidget):
             consultation_id (int): ID of the consultation that was updated
             new_status (str): New status of the consultation
             trigger (str): What triggered the update
+            
+        Returns:
+            bool: True if update was successful, False otherwise
         """
         try:
             logger.info(f"🔄 [HISTORY REFRESH] Real-time refresh for consultation {consultation_id} -> {new_status} (trigger: {trigger})")
@@ -1496,7 +1574,7 @@ class ConsultationPanel(QTabWidget):
             # Debug: Check if history panel exists
             if not hasattr(self, 'history_panel') or self.history_panel is None:
                 logger.error(f"❌ [HISTORY REFRESH] History panel not found!")
-                return
+                return False
                 
             logger.info(f"📋 [HISTORY REFRESH] History panel found, attempting real-time status update...")
             
@@ -1504,32 +1582,23 @@ class ConsultationPanel(QTabWidget):
             status_updated = self.history_panel.update_consultation_status_realtime(consultation_id, new_status)
             
             if status_updated:
-                logger.info(f"✅ [HISTORY REFRESH] Status updated successfully for consultation {consultation_id}")
-                
-                # If status was updated successfully, also remove cancel button if no longer pending
-                if new_status != 'pending':
-                    logger.info(f"🗑️ [HISTORY REFRESH] Removing cancel button for consultation {consultation_id} (status: {new_status})")
-                    self.history_panel.remove_cancel_button_realtime(consultation_id)
-                    
-                logger.info(f"✅ [HISTORY REFRESH] Successfully updated consultation {consultation_id} status in real-time")
-                
-                # Force a repaint of the entire history panel to ensure changes are visible
-                self.history_panel.update()
-                self.history_panel.repaint()
-                
+                logger.info(f"✅ [HISTORY REFRESH] Successfully updated consultation {consultation_id} status to {new_status} in real-time")
+                return True
             else:
-                # Fallback to full refresh if real-time update fails
-                logger.warning(f"❌ [HISTORY REFRESH] Real-time update failed for consultation {consultation_id}, falling back to full refresh")
+                logger.warning(f"⚠️ [HISTORY REFRESH] Real-time status update failed for consultation {consultation_id}")
                 
-                # Use QTimer to ensure the refresh happens on the main thread
-                QTimer.singleShot(100, self.history_panel.refresh_consultations)
-            
-            # If we're not on the history tab, switch to it to show the update
-            current_tab = self.currentIndex()
-            logger.info(f"📱 [HISTORY REFRESH] Current tab: {current_tab}, trigger: {trigger}")
-            if trigger == 'faculty_response' and current_tab != 1:
-                logger.info("📱 [HISTORY REFRESH] Switching to history tab to show faculty response")
-                self.animate_tab_change(1)
+                # If real-time update failed, try a full refresh as fallback
+                logger.info(f"🔄 [HISTORY REFRESH] Falling back to full refresh for consultation {consultation_id}")
+                
+                def delayed_refresh():
+                    try:
+                        self.history_panel.refresh_consultations()
+                        logger.info(f"✅ [HISTORY REFRESH] Full refresh completed for consultation {consultation_id}")
+                    except Exception as refresh_e:
+                        logger.error(f"❌ [HISTORY REFRESH] Full refresh also failed: {str(refresh_e)}")
+                
+                QTimer.singleShot(100, delayed_refresh)
+                return False
                 
         except Exception as e:
             logger.error(f"❌ [HISTORY REFRESH] Error in real-time consultation history refresh: {str(e)}")
@@ -1540,6 +1609,7 @@ class ConsultationPanel(QTabWidget):
                 QTimer.singleShot(100, self.history_panel.refresh_consultations)
             except:
                 logger.error(f"❌ [HISTORY REFRESH] Even fallback refresh failed!")
+            return False
 
     def show_consultation_update_notification(self, update_data):
         """
