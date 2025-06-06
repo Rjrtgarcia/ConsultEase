@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
 from typing import Dict, Callable, Optional, Any
 import paho.mqtt.client as mqtt
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,8 @@ class AsyncMQTTService:
         # Asynchronous components
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="mqtt")
         self.publish_queue = Queue()
-        self.message_handlers: Dict[str, Callable] = {}
+        self.message_handlers = defaultdict(list)  # Changed from dict to defaultdict(list)
+        self.handler_lock = threading.Lock()
 
         # Background threads
         self.publish_thread = None
@@ -176,13 +178,15 @@ class AsyncMQTTService:
                 logger.error(f"Failed to decode message payload for topic {topic}")
                 return
 
-            # Find matching handler
-            handler = self._find_message_handler(topic)
-            if handler:
-                # Execute handler in thread pool to avoid blocking
-                self.executor.submit(self._execute_handler, handler, topic, data)
+            # Find all matching handlers
+            handlers = self._find_message_handlers(topic)
+            if handlers:
+                logger.debug(f"Found {len(handlers)} handlers for topic {topic}")
+                # Execute all handlers in thread pool to avoid blocking
+                for handler in handlers:
+                    self.executor.submit(self._execute_handler, handler, topic, data)
             else:
-                logger.debug(f"No handler found for topic: {topic}")
+                logger.debug(f"No handlers found for topic: {topic}")
 
         except Exception as e:
             logger.error(f"Error processing MQTT message: {e}")
@@ -191,18 +195,21 @@ class AsyncMQTTService:
         """Handle successful message publication."""
         logger.debug(f"Message published successfully (mid: {mid})")
 
-    def _find_message_handler(self, topic: str) -> Optional[Callable]:
-        """Find the appropriate message handler for a topic."""
-        # Exact match first
-        if topic in self.message_handlers:
-            return self.message_handlers[topic]
+    def _find_message_handlers(self, topic: str) -> list:
+        """Find all registered handlers for a topic."""
+        handlers = []
+        
+        with self.handler_lock:
+            # Exact match first
+            if topic in self.message_handlers:
+                handlers.extend(self.message_handlers[topic])
 
-        # Wildcard matching
-        for pattern, handler in self.message_handlers.items():
-            if self._topic_matches(topic, pattern):
-                return handler
+            # Wildcard matching
+            for pattern, pattern_handlers in self.message_handlers.items():
+                if pattern != topic and self._topic_matches(topic, pattern):
+                    handlers.extend(pattern_handlers)
 
-        return None
+        return handlers
 
     def _topic_matches(self, topic: str, pattern: str) -> bool:
         """Check if topic matches pattern with wildcards."""
@@ -230,9 +237,12 @@ class AsyncMQTTService:
     def _execute_handler(self, handler: Callable, topic: str, data: Any):
         """Execute message handler safely."""
         try:
+            handler_name = getattr(handler, '__name__', str(handler))
+            logger.debug(f"Executing handler '{handler_name}' for topic '{topic}'")
             handler(topic, data)
         except Exception as e:
-            logger.error(f"Error in message handler for topic {topic}: {e}")
+            handler_name = getattr(handler, '__name__', str(handler))
+            logger.error(f"Error in message handler '{handler_name}' for topic {topic}: {e}")
 
     def start(self):
         """Start the asynchronous MQTT service."""
@@ -531,7 +541,8 @@ class AsyncMQTTService:
             topic: MQTT topic (supports wildcards + and #)
             handler: Callable that takes (topic, data) as arguments
         """
-        self.message_handlers[topic] = handler
+        with self.handler_lock:
+            self.message_handlers[topic].append(handler)
 
         # Subscribe to topic if connected
         if self.is_connected and self.client:
@@ -545,20 +556,23 @@ class AsyncMQTTService:
             except Exception as e:
                 logger.error(f"Error subscribing to topic {topic}: {e}")
 
-        logger.debug(f"Registered handler for topic: {topic}")
+        total_handlers = len(self.message_handlers[topic])
+        logger.info(f"✅ Registered handler for topic '{topic}' (total handlers for this topic: {total_handlers})")
 
     def unregister_topic_handler(self, topic: str):
         """Unregister a topic handler."""
-        if topic in self.message_handlers:
-            del self.message_handlers[topic]
+        with self.handler_lock:
+            if topic in self.message_handlers:
+                handlers = self.message_handlers[topic]
+                self.message_handlers[topic] = []
 
-            # Unsubscribe from topic if connected
-            if self.is_connected and self.client:
-                try:
-                    self.client.unsubscribe(topic)
-                    logger.info(f"Unsubscribed from topic: {topic}")
-                except Exception as e:
-                    logger.error(f"Error unsubscribing from topic {topic}: {e}")
+                # Unsubscribe from topic if connected
+                if self.is_connected and self.client:
+                    try:
+                        self.client.unsubscribe(topic)
+                        logger.info(f"Unsubscribed from topic: {topic}")
+                    except Exception as e:
+                        logger.error(f"Error unsubscribing from topic {topic}: {e}")
 
     def get_stats(self) -> Dict[str, Any]:
         """Get service statistics including batching metrics."""

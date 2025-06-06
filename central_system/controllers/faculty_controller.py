@@ -36,6 +36,9 @@ class FacultyController:
         # Subscribe to faculty status updates using async MQTT service
         subscribe_to_topic("consultease/faculty/+/status", self.handle_faculty_status_update)
 
+        # Subscribe to faculty MAC address status updates (from ESP32 units)
+        subscribe_to_topic("consultease/faculty/+/mac_status", self.handle_faculty_status_update)
+
         # Subscribe to legacy faculty desk unit status updates for backward compatibility
         subscribe_to_topic(MQTTTopics.LEGACY_FACULTY_STATUS, self.handle_faculty_status_update)
 
