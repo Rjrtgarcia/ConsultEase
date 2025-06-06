@@ -1876,13 +1876,11 @@ void clearCurrentMessageImmediately() {
   g_receivedConsultationId = "";
   currentMessageDisplayed = false;
   
-  // COMPLETELY REDRAW THE UI to remove consultation headers
-  drawCompleteUI();
-  
-  // Update LED status immediately
+  // Update LED status immediately (turn off message LED)
+  hasUnreadMessages = false;
   updateMessageLED();
   
-  DEBUG_PRINTLN("✅ Message variables cleared and complete UI redrawn");
+  DEBUG_PRINTLN("✅ Message variables cleared");
 }
 
 // ================================
@@ -2227,7 +2225,8 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   // CHECK IF THIS IS A CANCELLATION REQUEST
   String topicStr = String(topic);
   if (topicStr.endsWith("/cancellations")) {
-    DEBUG_PRINTLN("🚫 Cancellation request received");
+    DEBUG_PRINTF("🚫 CANCELLATION REQUEST RECEIVED on topic: %s\n", topicStr.c_str());
+    DEBUG_PRINTF("🚫 Cancellation payload: %s\n", messageContent.c_str());
     handleCancellationNotification(messageContent);  // Use your existing function name
     return; // Don't process as regular message
   }
@@ -2797,127 +2796,190 @@ if (millis() - lastStatusUpdate > 15000) {
 // ================================
 
 void handleCancellationNotification(String messageContent) {
-  DEBUG_PRINTF("🚫 Cancellation notification received: %s\n", messageContent.c_str());
+  DEBUG_PRINTF("🚫 CANCELLATION NOTIFICATION START\n");
+  DEBUG_PRINTF("🚫 Raw message (%d chars): %s\n", messageContent.length(), messageContent.c_str());
   
   // Parse JSON message to extract consultation ID
-  int cidIndex = messageContent.indexOf("consultation_id");
+  int cidIndex = messageContent.indexOf("\"consultation_id\"");
   if (cidIndex == -1) {
-    DEBUG_PRINTLN("⚠️ No consultation_id found in cancellation notification");
+    DEBUG_PRINTLN("⚠️ No 'consultation_id' field found in cancellation notification");
+    DEBUG_PRINTLN("⚠️ Trying alternative format...");
+    cidIndex = messageContent.indexOf("consultation_id");
+    if (cidIndex == -1) {
+      DEBUG_PRINTLN("❌ No consultation_id found at all - message format invalid");
+      return;
+    }
+  }
+  
+  DEBUG_PRINTF("🔍 Found consultation_id at position: %d\n", cidIndex);
+  
+  // Extract consultation ID from JSON - find the colon after the field name
+  int colonIndex = messageContent.indexOf(":", cidIndex);
+  if (colonIndex == -1) {
+    DEBUG_PRINTLN("❌ No colon found after consultation_id field");
     return;
   }
   
-  // Extract consultation ID from JSON
-  int colonIndex = messageContent.indexOf(":", cidIndex);
-  if (colonIndex == -1) return;
+  DEBUG_PRINTF("🔍 Found colon at position: %d\n", colonIndex);
   
+  // Skip whitespace after colon
   int startIndex = colonIndex + 1;
-  int endIndex = messageContent.indexOf(",", startIndex);
-  if (endIndex == -1) {
-    endIndex = messageContent.indexOf("}", startIndex);
+  while (startIndex < messageContent.length() && 
+         (messageContent.charAt(startIndex) == ' ' || messageContent.charAt(startIndex) == '\t')) {
+    startIndex++;
   }
-  if (endIndex == -1) return;
+  
+  if (startIndex >= messageContent.length()) {
+    DEBUG_PRINTLN("❌ No value found after consultation_id colon");
+    return;
+  }
+  
+  DEBUG_PRINTF("🔍 Value starts at position: %d (char: '%c')\n", startIndex, messageContent.charAt(startIndex));
+  
+  // Find end of the number value (look for comma, closing brace, or whitespace)
+  int endIndex = startIndex;
+  while (endIndex < messageContent.length()) {
+    char c = messageContent.charAt(endIndex);
+    if (c == ',' || c == '}' || c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+      break;
+    }
+    endIndex++;
+  }
+  
+  if (endIndex <= startIndex) {
+    DEBUG_PRINTLN("❌ Invalid consultation_id value format");
+    return;
+  }
+  
+  DEBUG_PRINTF("🔍 Value ends at position: %d\n", endIndex);
   
   String consultationId = messageContent.substring(startIndex, endIndex);
   consultationId.trim();
-  consultationId.replace("\"", "");  // Remove quotes
-  consultationId.replace(" ", "");   // Remove spaces
+  consultationId.replace("\"", "");  // Remove quotes if any
   
-  DEBUG_PRINTF("🔑 Extracted consultation ID from cancellation: '%s'\n", consultationId.c_str());
+  DEBUG_PRINTF("🔍 Raw extracted ID: '%s'\n", consultationId.c_str());
+  
+  // Convert to internal format with CID prefix
+  String internalConsultationId = "CID" + consultationId;
+  
+  DEBUG_PRINTF("🔑 FINAL IDs: raw='%s' -> internal='%s'\n", consultationId.c_str(), internalConsultationId.c_str());
   
   // Check if this consultation is currently displayed
-  if (currentMessageDisplayed && g_receivedConsultationId.equals(consultationId)) {
-    DEBUG_PRINTLN("🚫 Cancelling currently displayed consultation");
+  DEBUG_PRINTF("🔍 CHECKING CURRENT MESSAGE: currentMessageDisplayed=%s, g_receivedConsultationId='%s'\n", 
+               currentMessageDisplayed ? "TRUE" : "FALSE", 
+               g_receivedConsultationId.c_str());
+  
+  if (currentMessageDisplayed && g_receivedConsultationId.equals(internalConsultationId)) {
+    DEBUG_PRINTF("✅ MATCH! Cancelling currently displayed consultation: %s\n", internalConsultationId.c_str());
     
-    // Clear the current message state
+    // Clear the current message state immediately
     currentMessageDisplayed = false;
     messageDisplayed = false;
     g_receivedConsultationId = "";
     
+    DEBUG_PRINTLN("🎬 Showing cancellation message...");
     // Show cancellation message briefly
-    tft.fillScreen(ST77XX_BLACK);
     displayCancelledConsultation(consultationId);
+    delay(1500);  // Show for 1.5 seconds
     
-    // Process next message in queue after a short delay
-    unsigned long cancelDisplayTime = millis();
-    while (millis() - cancelDisplayTime < 2000) {  // Show cancellation for 2 seconds (reduced)
-      delay(100);
-    }
-    
-    // Clear screen completely and redraw complete UI
+    DEBUG_PRINTLN("🎨 Redrawing complete UI...");
+    // Clear screen and redraw complete UI
     drawCompleteUI();
     
+    DEBUG_PRINTLN("💡 Updating LED status...");
     // Update LED status
     updateMessageLED();
     
+    DEBUG_PRINTLN("▶️ Processing next consultation in queue...");
     // Process next consultation in queue OR return to main screen
     processNextQueuedConsultation();
     
+    DEBUG_PRINTLN("✅ CANCELLATION COMPLETED - Current message cleared and UI updated");
+    
   } else {
+    DEBUG_PRINTF("🔍 Current message not matching, checking queue (size: %d)...\n", consultationQueueSize);
+    
     // Check if the consultation is in the queue and remove it
     bool foundInQueue = false;
     for (int i = 0; i < MAX_CONSULTATION_QUEUE_SIZE; i++) {
-      if (consultationQueue[i].isValid && consultationQueue[i].consultationId.equals(consultationId)) {
-        DEBUG_PRINTF("🚫 Removing consultation %s from queue (position %d)\n", consultationId.c_str(), i);
+      if (consultationQueue[i].isValid) {
+        DEBUG_PRINTF("🔍 Queue[%d]: ID='%s' (looking for '%s')\n", 
+                     i, consultationQueue[i].consultationId.c_str(), internalConsultationId.c_str());
         
-        // Mark as invalid
-        consultationQueue[i].isValid = false;
-        consultationQueue[i].consultationId = "";
-        consultationQueue[i].content = "";
-        
-        foundInQueue = true;
-        break;
+        if (consultationQueue[i].consultationId.equals(internalConsultationId)) {
+          DEBUG_PRINTF("✅ FOUND! Removing consultation %s from queue (position %d)\n", internalConsultationId.c_str(), i);
+          
+          // Mark as invalid
+          consultationQueue[i].isValid = false;
+          consultationQueue[i].consultationId = "";
+          consultationQueue[i].content = "";
+          
+          foundInQueue = true;
+          break;
+        }
       }
     }
     
     if (foundInQueue) {
+      DEBUG_PRINTLN("🗜️ Compressing consultation queue...");
       // Compress the queue to remove gaps
       compressConsultationQueue();
-      DEBUG_PRINTF("📥 Consultation queue compressed, new size: %d\n", consultationQueueSize);
+      DEBUG_PRINTF("✅ QUEUE CANCELLATION COMPLETED - Queue compressed, new size: %d\n", consultationQueueSize);
     } else {
-      DEBUG_PRINTF("ℹ️ Consultation %s not found in current display or queue\n", consultationId.c_str());
+      DEBUG_PRINTF("❌ Consultation %s NOT FOUND in current display or queue\n", internalConsultationId.c_str());
+      DEBUG_PRINTLN("💡 This might be a cancellation for a consultation that was already processed or doesn't exist");
     }
   }
+  
+  DEBUG_PRINTLN("🚫 CANCELLATION NOTIFICATION END\n");
 }
 
 void displayCancelledConsultation(String consultationId) {
-  // Clear screen
-  tft.fillScreen(ST77XX_BLACK);
+  // Clear screen with background color
+  tft.fillScreen(COLOR_BACKGROUND);
   
   // Header
-  tft.setTextColor(ST77XX_WHITE);
+  tft.setTextColor(COLOR_ERROR);
   tft.setTextSize(2);
-  tft.setCursor(10, 10);
+  int headerX = getCenterX("CONSULTATION", 2);
+  tft.setCursor(headerX, 40);
   tft.println("CONSULTATION");
-  tft.setCursor(10, 35);
+  
+  headerX = getCenterX("CANCELLED", 2);
+  tft.setCursor(headerX, 65);
   tft.println("CANCELLED");
   
   // Draw line
-  tft.drawLine(0, 65, SCREEN_WIDTH, 65, ST77XX_RED);
+  tft.drawLine(20, 95, SCREEN_WIDTH - 20, 95, COLOR_ERROR);
   
-  // Cancellation icon and message
-  tft.setTextColor(ST77XX_RED);
-  tft.setTextSize(3);
-  tft.setCursor(SCREEN_WIDTH/2 - 10, 80);
+  // Cancellation icon
+  tft.setTextColor(COLOR_ERROR);
+  tft.setTextSize(4);
+  int iconX = getCenterX("X", 4);
+  tft.setCursor(iconX, 110);
   tft.println("X");
   
-  tft.setTextColor(ST77XX_WHITE);
+  // Message
+  tft.setTextColor(COLOR_TEXT);
   tft.setTextSize(1);
-  tft.setCursor(10, 120);
+  int msgX = getCenterX("The consultation request", 1);
+  tft.setCursor(msgX, 160);
   tft.println("The consultation request");
-  tft.setCursor(10, 135);
-  tft.println("has been cancelled by");
-  tft.setCursor(10, 150);
-  tft.println("the student.");
+  
+  msgX = getCenterX("has been cancelled", 1);
+  tft.setCursor(msgX, 175);
+  tft.println("has been cancelled");
+  
+  msgX = getCenterX("by the student", 1);
+  tft.setCursor(msgX, 190);
+  tft.println("by the student");
   
   // Consultation ID
-  tft.setTextColor(ST77XX_YELLOW);
-  tft.setCursor(10, 175);
-  tft.printf("ID: %s", consultationId.c_str());
-  
-  // Status message
-  tft.setTextColor(ST77XX_CYAN);
-  tft.setCursor(10, 200);
-  tft.println("Returning to main screen...");
+  String idText = "ID: " + consultationId;
+  tft.setTextColor(COLOR_ACCENT);
+  int idX = getCenterX(idText, 1);
+  tft.setCursor(idX, 210);
+  tft.println(idText);
 }
 
 void compressConsultationQueue() {

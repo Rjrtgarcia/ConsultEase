@@ -231,7 +231,7 @@ class DashboardWindow(BaseWindow):
         
         # Track last refresh time to prevent rapid refreshes that override real-time updates
         self._last_refresh_time = 0
-        self._min_refresh_interval = 2.0  # Minimum 2 seconds between full refreshes
+        self._min_refresh_interval = 1.0  # Minimum 1 second between full refreshes (reduced for faster response)
         
         # Initialize UI component references
         self.faculty_card_manager = None
@@ -1790,23 +1790,24 @@ class DashboardWindow(BaseWindow):
                 
             logger.info(f"🔄 Processing dashboard status update: Faculty {faculty_id} -> {new_status}")
                 
-            # 🔧 FIX: Add small delay to prevent race condition with database updates
-            # The Faculty Controller needs time to commit database changes before UI updates
+            # 🔧 FIX: Immediate real-time update with minimal delay for database commit
+            # The Faculty Controller needs a small amount of time to commit database changes
             from PyQt5.QtCore import QTimer
             
-            def delayed_update():
-                # Find and update the corresponding faculty card
+            def immediate_update():
+                # Find and update the corresponding faculty card immediately
                 card_updated = self.update_faculty_card_status(faculty_id, new_status)
 
-                # Only trigger a full refresh if the card wasn't found in the current view
-                if not card_updated:
-                    logger.warning(f"❌ [UI FALLBACK] Faculty card for ID {faculty_id} not found, triggering full UI refresh")
-                    self.request_ui_refresh.emit()
+                # Log the result for debugging
+                if card_updated:
+                    logger.info(f"✅ [REAL-TIME UPDATE] Faculty card for ID {faculty_id} updated immediately")
                 else:
-                    logger.info(f"✅ [UI SUCCESS] Faculty card for ID {faculty_id} updated in place, no full refresh needed")
+                    logger.warning(f"❌ [REAL-TIME UPDATE] Faculty card for ID {faculty_id} not found in current view")
+                    # Try a quick refresh if card not found
+                    self.request_ui_refresh.emit()
             
-            # Delay UI update by 500ms to allow Faculty Controller database commit to complete
-            QTimer.singleShot(500, delayed_update)
+            # Immediate update for real-time responsiveness
+            QTimer.singleShot(0, immediate_update)
             
         except Exception as e:
             logger.error(f"Error processing status update safely: {e}")
@@ -1848,24 +1849,23 @@ class DashboardWindow(BaseWindow):
                     converted_status = self._map_status_for_display(new_status)
                     logger.info(f"🎯 [DASHBOARD] Status conversion: {new_status} -> {converted_status}")
                     
-                    # 🔧 FIX: Add delay to prevent race condition - use delayed update
+                    # 🔧 FIX: Immediate system notification update
                     from PyQt5.QtCore import QTimer
                     
-                    def delayed_system_update():
-                        # Update the faculty card
+                    def immediate_system_update():
+                        # Update the faculty card immediately
                         card_updated = self.update_faculty_card_status(faculty_id, converted_status)
-                        logger.info(f"🎯 [DASHBOARD] Faculty {faculty_id} status update result: card_updated={card_updated}")
+                        logger.info(f"🎯 [DASHBOARD] Faculty {faculty_id} system notification update result: card_updated={card_updated}")
                         
-                        # System notifications are secondary to direct status updates
-                        # Only refresh if card wasn't found and updated in place
+                        # System notifications should also update immediately
                         if not card_updated:
                             logger.info(f"🔄 [DASHBOARD] Faculty card for ID {faculty_id} not visible, triggering refresh")
                             self.request_ui_refresh.emit()
                         else:
-                            logger.info(f"✅ [DASHBOARD] Faculty card for ID {faculty_id} updated successfully")
+                            logger.info(f"✅ [DASHBOARD] Faculty card for ID {faculty_id} updated via system notification")
                     
-                    # Delay by 750ms (longer than direct status updates) since system notifications are secondary
-                    QTimer.singleShot(750, delayed_system_update)
+                    # Immediate update for system notifications too
+                    QTimer.singleShot(0, immediate_system_update)
             
             # ✅ FIX: Handle faculty response notifications (BUSY, ACKNOWLEDGE, etc.)
             elif data.get('type') == 'faculty_response_received':
@@ -1880,11 +1880,11 @@ class DashboardWindow(BaseWindow):
                     display_status = self._map_status_for_display(new_status)
                     logger.info(f"🔧 [DASHBOARD] Faculty response status conversion: {new_status} -> {display_status}")
                     
-                    # Add delay for faculty response updates too
+                    # Immediate faculty response updates too
                     from PyQt5.QtCore import QTimer
                     
-                    def delayed_response_update():
-                        # Update the faculty card
+                    def immediate_response_update():
+                        # Update the faculty card immediately
                         card_updated = self.update_faculty_card_status(faculty_id, display_status)
                         logger.info(f"🔧 [DASHBOARD] Faculty response notification for faculty {faculty_id} processed, card_updated: {card_updated}")
                         
@@ -1892,10 +1892,10 @@ class DashboardWindow(BaseWindow):
                             logger.info(f"🔄 [DASHBOARD] Faculty card for ID {faculty_id} not found, triggering full refresh")
                             self.request_ui_refresh.emit()
                         else:
-                            logger.info(f"✅ [DASHBOARD] Faculty card for ID {faculty_id} updated successfully")
+                            logger.info(f"✅ [DASHBOARD] Faculty card for ID {faculty_id} updated via response notification")
                     
-                    # Delay by 500ms for faculty response updates
-                    QTimer.singleShot(500, delayed_response_update)
+                    # Immediate update for faculty response updates
+                    QTimer.singleShot(0, immediate_response_update)
                         
         except Exception as e:
             logger.error(f"Error processing system notification safely: {e}")
@@ -2004,14 +2004,18 @@ class DashboardWindow(BaseWindow):
                 if card_faculty_id == faculty_id:
                     logger.info(f"🎯 [UI UPDATE] Found matching faculty card at position {i}")
                     
+                    # Store old state for comparison
+                    old_status = faculty_card.faculty_data.get('status', 'unknown')
+                    old_available = faculty_card.faculty_data.get('available', False)
+                    
                     # Update card's internal state and display using its own method
                     faculty_card.update_status(status_string)
-                    logger.info(f"📝 [UI UPDATE] Called update_status({status_string}) on card")
+                    logger.info(f"📝 [UI UPDATE] Called update_status({status_string}) on card (was: {old_status})")
                     
                     # Update faculty_data dictionary stored in the card
                     faculty_card.faculty_data['available'] = available
                     faculty_card.faculty_data['status'] = status_string
-                    logger.info(f"📝 [UI UPDATE] Updated faculty_data: available={available}, status={status_string}")
+                    logger.info(f"📝 [UI UPDATE] Updated faculty_data: {old_status}→{status_string}, {old_available}→{available}")
 
                     # Update card's objectName for theming
                     if new_status is True:
@@ -2026,14 +2030,19 @@ class DashboardWindow(BaseWindow):
                         faculty_card.setObjectName(new_object_name)
                         logger.info(f"📝 [UI UPDATE] Changed objectName: {old_object_name} → {new_object_name}")
                         
-                        # Force style refresh
+                        # Force style refresh and immediate repaint
                         faculty_card.style().unpolish(faculty_card)
                         faculty_card.style().polish(faculty_card)
                         faculty_card.update()
                         faculty_card.repaint()  # Force immediate repaint
                         logger.info(f"🎨 [UI UPDATE] Forced style refresh and repaint")
+                    else:
+                        # Still force an update even if objectName didn't change
+                        faculty_card.update()
+                        faculty_card.repaint()
+                        logger.info(f"🎨 [UI UPDATE] Forced card repaint (objectName unchanged)")
 
-                    logger.info(f"✅ [UI UPDATE] Successfully updated faculty card for ID {faculty_id} to status: {status_string}")
+                    logger.info(f"✅ [UI UPDATE] Successfully updated faculty card for ID {faculty_id}: {old_status}→{status_string}")
                     return True # Found and updated
             
             logger.warning(f"❌ [UI UPDATE] Faculty card for ID {faculty_id} not found in current view")
