@@ -222,6 +222,9 @@ class DashboardWindow(BaseWindow):
         self.faculty_list = []
         self.consultation_panel = None
         
+        # Track MQTT subscription setup to prevent duplicates
+        self._mqtt_setup_done = False
+        
         # Set up real-time consultation status updates
         self.setup_real_time_updates()
         
@@ -235,7 +238,9 @@ class DashboardWindow(BaseWindow):
         self.refresh_timer.start(180000)  # Start with 3 minutes
 
         # Set up real-time MQTT subscription for faculty status updates
-        self.setup_realtime_updates()
+        if not self._mqtt_setup_done:
+            self.setup_realtime_updates()
+            self._mqtt_setup_done = True
 
         # UI performance utilities
         self.ui_batcher = get_ui_batcher()
@@ -289,12 +294,12 @@ class DashboardWindow(BaseWindow):
             else:
                 # Legacy support for student objects
                 student_name = getattr(self.student, 'name', 'Student')
-            welcome_label = QLabel(f"Welcome, {student_name}")
+            self.welcome_label = QLabel(f"Welcome, {student_name}")
         else:
-            welcome_label = QLabel("Welcome to ConsultEase")
+            self.welcome_label = QLabel("Welcome to ConsultEase")
 
         # Enhanced header styling for consistency with admin dashboard
-        welcome_label.setStyleSheet("""
+        self.welcome_label.setStyleSheet("""
             QLabel {
                 font-size: 28pt;
                 font-weight: bold;
@@ -306,7 +311,7 @@ class DashboardWindow(BaseWindow):
                 min-height: 60px;
             }
         """)
-        header_layout.addWidget(welcome_label)
+        header_layout.addWidget(self.welcome_label)
 
         # Logout button - larger size for better usability
         logout_button = QPushButton("Logout")
@@ -1797,12 +1802,17 @@ class DashboardWindow(BaseWindow):
         Set up real-time updates for consultation status changes.
         """
         try:
+            # Prevent duplicate setup
+            if hasattr(self, '_consultation_updates_setup'):
+                return
+                
             # Import and register with faculty response controller
             from ..controllers.faculty_response_controller import get_faculty_response_controller
             
             self.faculty_response_controller = get_faculty_response_controller()
             self.faculty_response_controller.register_callback(self.handle_faculty_response_update)
             
+            self._consultation_updates_setup = True
             logger.info("Registered for real-time consultation status updates")
             
         except Exception as e:

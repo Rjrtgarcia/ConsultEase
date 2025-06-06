@@ -600,15 +600,18 @@ class ConsultEaseApp:
             self.dashboard_window.change_window.connect(self.handle_window_change)
             self.dashboard_window.consultation_requested.connect(self.handle_consultation_request)
         else:
-            # Update student info and reinitialize the UI
+            # Update student info without full UI reinitialization
             student_name = student_data.get('name', 'None') if student_data else 'None'
             logger.info(f"Updating dashboard with new student: {student_name}")
 
             # Store the new student data
             self.dashboard_window.student = student_data
 
-            # Reinitialize the UI to update the welcome message and other student-specific elements
-            self.dashboard_window.init_ui()
+            # Update only student-specific elements without full UI rebuild
+            # This prevents MQTT subscription multiplication
+            if hasattr(self.dashboard_window, 'welcome_label'):
+                welcome_text = f"Welcome, {student_name}!"
+                self.dashboard_window.welcome_label.setText(welcome_text)
 
             # Update the consultation panel with the new student
             if hasattr(self.dashboard_window, 'consultation_panel'):

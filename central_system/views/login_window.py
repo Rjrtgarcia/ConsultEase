@@ -349,13 +349,9 @@ class LoginWindow(BaseWindow):
 
             # Emit the signal to navigate to the dashboard with safe student data
             self.student_authenticated.emit(student_data)
-
-            # Also emit a change_window signal as a backup
-            self.logger.info(f"LoginWindow: Emitting change_window signal for dashboard")
-            self.change_window.emit("dashboard", student_data)
-
-            # Force a delay to ensure the signals are processed
-            QTimer.singleShot(500, lambda: self._force_dashboard_navigation(student_data))
+            
+            # Note: Removed redundant change_window signal and fallback timer to prevent 
+            # multiple dashboard window creation and MQTT subscription multiplexing
         else:
             # Authentication failed
             self.logger.warning(f"Authentication failed for RFID: {rfid_uid}")
@@ -364,12 +360,13 @@ class LoginWindow(BaseWindow):
     def _force_dashboard_navigation(self, student_data):
         """
         Force navigation to dashboard as a fallback.
+        Note: This method is no longer used to prevent duplicate window creation.
 
         Args:
             student_data (dict): Student data dictionary
         """
-        self.logger.info("Forcing dashboard navigation as fallback")
-        self.change_window.emit("dashboard", student_data)
+        # Method kept for compatibility but no longer used
+        pass
 
     def show_success(self, message):
         """
