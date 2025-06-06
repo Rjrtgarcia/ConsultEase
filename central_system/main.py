@@ -569,6 +569,11 @@ class ConsultEaseApp:
 
         # Hide other windows that aren't transitioning
         if self.dashboard_window and self.dashboard_window != current_window:
+            # Stop inactivity monitoring when hiding dashboard (student logout)
+            if hasattr(self.dashboard_window, 'inactivity_monitor') and self.dashboard_window.inactivity_monitor:
+                if self.dashboard_window.inactivity_monitor.is_monitoring():
+                    self.dashboard_window.inactivity_monitor.stop_monitoring()
+                    logger.info("Stopped inactivity monitor on student logout")
             self.dashboard_window.hide()
         if self.admin_login_window and self.admin_login_window != current_window:
             self.admin_login_window.hide()
@@ -617,6 +622,13 @@ class ConsultEaseApp:
             if hasattr(self.dashboard_window, 'consultation_panel'):
                 self.dashboard_window.consultation_panel.set_student(student_data)
                 self.dashboard_window.consultation_panel.refresh_history()
+                
+            # Restart inactivity monitor for the new student
+            if hasattr(self.dashboard_window, 'inactivity_monitor') and self.dashboard_window.inactivity_monitor:
+                if self.dashboard_window.inactivity_monitor.is_monitoring():
+                    self.dashboard_window.inactivity_monitor.stop_monitoring()
+                self.dashboard_window.inactivity_monitor.start_monitoring()
+                logger.info(f"Restarted inactivity monitor for new student: {student_name}")
 
         # Populate faculty grid with fresh data
         try:

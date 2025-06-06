@@ -16,6 +16,7 @@ from ..utils.ui_performance import (
     get_ui_batcher, get_widget_state_manager, SmartRefreshManager,
     batch_ui_update, timed_ui_update
 )
+from ..utils.inactivity_monitor import get_inactivity_monitor
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -274,6 +275,11 @@ class DashboardWindow(BaseWindow):
             logger.info(f"Dashboard initialized with student: ID={student_id}, Name={student_name}, RFID={student_rfid}")
         else:
             logger.warning("Dashboard initialized without student information")
+
+        # Set up inactivity monitor for automatic logout (student users only)
+        self.inactivity_monitor = None
+        if student:  # Only enable for students, not admin users
+            self.setup_inactivity_monitor()
 
     def init_ui(self):
         """
@@ -1428,12 +1434,76 @@ class DashboardWindow(BaseWindow):
             screen_width = QApplication.desktop().screenGeometry().width()
             self.content_splitter.setSizes([int(screen_width * 0.6), int(screen_width * 0.4)])
 
-    def logout(self):
+    def setup_inactivity_monitor(self):
         """
-        Handle logout button click.
+        Set up the inactivity monitor for automatic logout.
+        Only called for student users.
         """
+        try:
+            self.inactivity_monitor = get_inactivity_monitor()
+            
+            # Set the logout callback
+            self.inactivity_monitor.set_logout_callback(self.handle_auto_logout)
+            
+            # Connect signals for additional handling if needed
+            self.inactivity_monitor.auto_logout.connect(self.on_auto_logout_signal)
+            
+            # Start monitoring when dashboard is shown
+            self.inactivity_monitor.start_monitoring()
+            
+            logger.info("✅ Inactivity monitor set up for student dashboard - 2 minute timeout with 30 second warning")
+            
+        except Exception as e:
+            logger.error(f"Error setting up inactivity monitor: {e}")
+            self.inactivity_monitor = None
+
+    def handle_auto_logout(self):
+        """
+        Handle automatic logout due to inactivity.
+        This is the callback function called by the inactivity monitor.
+        """
+        logger.info("Handling automatic logout due to inactivity")
+        
+        # Show session expired message
+        try:
+            QMessageBox.information(
+                self, 
+                "Session Expired", 
+                "Your session has expired due to inactivity.\nYou have been automatically logged out."
+            )
+        except Exception as e:
+            logger.error(f"Error showing session expired message: {e}")
+        
+        # Perform logout
+        self.logout(auto_logout=True)
+
+    def on_auto_logout_signal(self):
+        """
+        Handle the auto-logout signal from inactivity monitor.
+        This provides an additional hook for any cleanup if needed.
+        """
+        logger.info("Auto-logout signal received from inactivity monitor")
+
+    def logout(self, auto_logout=False):
+        """
+        Handle logout button click or automatic logout.
+        
+        Args:
+            auto_logout (bool): True if this is an automatic logout due to inactivity
+        """
+        # Stop inactivity monitoring
+        if self.inactivity_monitor and self.inactivity_monitor.is_monitoring():
+            self.inactivity_monitor.stop_monitoring()
+            logger.info("Stopped inactivity monitoring on logout")
+
         # Save splitter state before logout
         self.save_splitter_state()
+
+        # Log the logout type
+        if auto_logout:
+            logger.info("Student auto-logout due to inactivity")
+        else:
+            logger.info("Student manual logout")
 
         self.change_window.emit("login", None)
 
@@ -1569,6 +1639,11 @@ class DashboardWindow(BaseWindow):
         """
         Handle window close event with proper cleanup.
         """
+        # Stop inactivity monitoring
+        if hasattr(self, 'inactivity_monitor') and self.inactivity_monitor and self.inactivity_monitor.is_monitoring():
+            self.inactivity_monitor.stop_monitoring()
+            logger.info("Stopped inactivity monitoring on window close")
+
         # Clean up faculty card manager
         if hasattr(self, 'faculty_card_manager'):
             self.faculty_card_manager.clear_all_cards()
