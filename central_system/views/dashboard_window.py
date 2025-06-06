@@ -1745,11 +1745,27 @@ class DashboardWindow(BaseWindow):
             logger.info(f"[MQTT DASHBOARD HANDLER] handle_realtime_status_update - Topic: {topic}, Data: {data}")
             logger.debug(f"Received real-time faculty status update: {data}")
             
+            # 🔧 FIX: Use proper method reference instead of lambda to avoid closure issues
+            logger.info(f"🔄 [REALTIME] Scheduling immediate status update processing...")
+            
+            # Create a wrapper function to ensure proper data capture
+            def process_update_wrapper():
+                try:
+                    logger.info(f"🔄 [REALTIME] Executing status update wrapper for data: {data}")
+                    self._process_status_update_safe(data)
+                except Exception as wrapper_e:
+                    logger.error(f"❌ [REALTIME] Error in status update wrapper: {wrapper_e}")
+                    import traceback
+                    logger.error(f"❌ [REALTIME] Wrapper traceback: {traceback.format_exc()}")
+            
             # Use QTimer.singleShot to ensure UI updates happen on main thread
-            QTimer.singleShot(0, lambda: self._process_status_update_safe(data))
+            QTimer.singleShot(0, process_update_wrapper)
+            logger.info(f"✅ [REALTIME] Status update scheduled for immediate execution")
             
         except Exception as e:
-            logger.error(f"Error handling real-time status update: {e}")
+            logger.error(f"❌ [REALTIME] Error handling real-time status update: {e}")
+            import traceback
+            logger.error(f"❌ [REALTIME] Handler traceback: {traceback.format_exc()}")
 
     def _process_status_update_safe(self, data):
         """
@@ -1759,17 +1775,33 @@ class DashboardWindow(BaseWindow):
             data (dict): Status update data
         """
         try:
+            logger.info(f"🔄 [PROCESS_SAFE] Starting status update processing for data: {data}")
+            
+            # Check if faculty card manager is initialized
+            if not hasattr(self, 'faculty_card_manager') or self.faculty_card_manager is None:
+                logger.error(f"❌ [PROCESS_SAFE] Faculty card manager not initialized!")
+                return
+                
+            # Check if faculty grid is initialized  
+            if not hasattr(self, 'faculty_grid') or self.faculty_grid is None:
+                logger.error(f"❌ [PROCESS_SAFE] Faculty grid not initialized!")
+                return
+                
+            logger.info(f"✅ [PROCESS_SAFE] Faculty card manager and grid are initialized")
+            
             # Process only standardized status update notifications (not raw ESP32 messages)
             faculty_id = data.get('faculty_id')
             new_status = data.get('status')
             
+            logger.info(f"🔍 [PROCESS_SAFE] Extracted: faculty_id={faculty_id}, new_status={new_status} (type: {type(new_status)})")
+            
             # Check if this is a properly formatted status update notification
             if data.get('type') == 'faculty_status':
                 # This is a processed notification from Faculty Controller
-                logger.debug(f"Processing faculty status notification: Faculty {faculty_id} -> {new_status}")
+                logger.info(f"✅ [PROCESS_SAFE] Processing faculty status notification: Faculty {faculty_id} -> {new_status}")
             else:
                 # Handle legacy or non-standard formats for backward compatibility
-                logger.debug(f"Processing legacy status update format: {data}")
+                logger.info(f"⚠️ [PROCESS_SAFE] Processing legacy status update format: {data}")
                 
                 # Handle string status values for backward compatibility
                 if isinstance(new_status, str):
@@ -1781,36 +1813,34 @@ class DashboardWindow(BaseWindow):
                     elif "BUSY" in status_str:
                         new_status = "busy"
                     else:
-                        logger.warning(f"Unknown status string: {new_status}")
+                        logger.warning(f"❌ [PROCESS_SAFE] Unknown status string: {new_status}")
                         return
             
             if faculty_id is None or new_status is None:
-                logger.warning(f"Invalid faculty status update: {data}")
+                logger.error(f"❌ [PROCESS_SAFE] Invalid faculty status update: faculty_id={faculty_id}, new_status={new_status}")
                 return
                 
-            logger.info(f"🔄 Processing dashboard status update: Faculty {faculty_id} -> {new_status}")
+            logger.info(f"🎯 [PROCESS_SAFE] Processing dashboard status update: Faculty {faculty_id} -> {new_status}")
                 
-            # 🔧 FIX: Immediate real-time update with minimal delay for database commit
-            # The Faculty Controller needs a small amount of time to commit database changes
-            from PyQt5.QtCore import QTimer
+            # 🔧 FIX: Direct immediate update without additional QTimer
+            logger.info(f"🔄 [PROCESS_SAFE] Calling update_faculty_card_status directly...")
             
-            def immediate_update():
-                # Find and update the corresponding faculty card immediately
-                card_updated = self.update_faculty_card_status(faculty_id, new_status)
+            # Find and update the corresponding faculty card immediately
+            card_updated = self.update_faculty_card_status(faculty_id, new_status)
 
-                # Log the result for debugging
-                if card_updated:
-                    logger.info(f"✅ [REAL-TIME UPDATE] Faculty card for ID {faculty_id} updated immediately")
-                else:
-                    logger.warning(f"❌ [REAL-TIME UPDATE] Faculty card for ID {faculty_id} not found in current view")
-                    # Try a quick refresh if card not found
-                    self.request_ui_refresh.emit()
-            
-            # Immediate update for real-time responsiveness
-            QTimer.singleShot(0, immediate_update)
+            # Log the result for debugging
+            if card_updated:
+                logger.info(f"✅ [PROCESS_SAFE] Faculty card for ID {faculty_id} updated successfully!")
+            else:
+                logger.warning(f"❌ [PROCESS_SAFE] Faculty card for ID {faculty_id} not found in current view")
+                logger.info(f"🔄 [PROCESS_SAFE] Triggering full UI refresh as fallback...")
+                # Try a quick refresh if card not found
+                self.request_ui_refresh.emit()
             
         except Exception as e:
-            logger.error(f"Error processing status update safely: {e}")
+            logger.error(f"❌ [PROCESS_SAFE] Error processing status update safely: {e}")
+            import traceback
+            logger.error(f"❌ [PROCESS_SAFE] Traceback: {traceback.format_exc()}")
 
     def handle_system_notification(self, topic, data):
         """
@@ -1823,11 +1853,27 @@ class DashboardWindow(BaseWindow):
         try:
             logger.info(f"[MQTT DASHBOARD HANDLER] handle_system_notification - Topic: {topic}, Data: {data}")
             
+            # 🔧 FIX: Use proper method reference instead of lambda to avoid closure issues
+            logger.info(f"🔄 [SYSTEM_NOTIF] Scheduling system notification processing...")
+            
+            # Create a wrapper function to ensure proper data capture
+            def process_notification_wrapper():
+                try:
+                    logger.info(f"🔄 [SYSTEM_NOTIF] Executing system notification wrapper for data: {data}")
+                    self._process_system_notification_safe(data)
+                except Exception as wrapper_e:
+                    logger.error(f"❌ [SYSTEM_NOTIF] Error in notification wrapper: {wrapper_e}")
+                    import traceback
+                    logger.error(f"❌ [SYSTEM_NOTIF] Wrapper traceback: {traceback.format_exc()}")
+            
             # Use QTimer.singleShot to ensure UI updates happen on main thread
-            QTimer.singleShot(0, lambda: self._process_system_notification_safe(data))
+            QTimer.singleShot(0, process_notification_wrapper)
+            logger.info(f"✅ [SYSTEM_NOTIF] System notification scheduled for immediate execution")
             
         except Exception as e:
-            logger.error(f"Error handling system notification: {e}")
+            logger.error(f"❌ [SYSTEM_NOTIF] Error handling system notification: {e}")
+            import traceback
+            logger.error(f"❌ [SYSTEM_NOTIF] Handler traceback: {traceback.format_exc()}")
 
     def _process_system_notification_safe(self, data):
         """
@@ -1947,7 +1993,18 @@ class DashboardWindow(BaseWindow):
             new_status (bool|str): New status (True = Available, False = Unavailable, "busy" = Busy)
         """
         try:
-            logger.info(f"🔍 [UI UPDATE] Searching for faculty card ID {faculty_id} to update status to {new_status}")
+            logger.info(f"🔍 [UI UPDATE] ===== STARTING FACULTY CARD UPDATE =====")
+            logger.info(f"🔍 [UI UPDATE] Target: faculty_id={faculty_id}, new_status={new_status} (type: {type(new_status)})")
+            
+            # Check if faculty grid exists and is initialized
+            if not hasattr(self, 'faculty_grid') or self.faculty_grid is None:
+                logger.error(f"❌ [UI UPDATE] Faculty grid is not initialized!")
+                return False
+                
+            # Check if faculty card manager exists
+            if not hasattr(self, 'faculty_card_manager') or self.faculty_card_manager is None:
+                logger.error(f"❌ [UI UPDATE] Faculty card manager is not initialized!")
+                return False
             
             # Normalize status to string
             if new_status is True:
@@ -1960,10 +2017,11 @@ class DashboardWindow(BaseWindow):
                 status_string = "busy"
                 available = False  # Busy is considered unavailable for consultation requests
             else:
-                logger.warning(f"Unknown status type for faculty {faculty_id}: {new_status}")
+                logger.error(f"❌ [UI UPDATE] Unknown status type for faculty {faculty_id}: {new_status}")
                 return False
             
-            logger.info(f"🔍 [UI UPDATE] Grid has {self.faculty_grid.count()} items")
+            logger.info(f"🔍 [UI UPDATE] Status mapping: {new_status} -> status_string='{status_string}', available={available}")
+            logger.info(f"🔍 [UI UPDATE] Faculty grid has {self.faculty_grid.count()} items to search")
             
             # Find the faculty card in the grid
             for i in range(self.faculty_grid.count()):
