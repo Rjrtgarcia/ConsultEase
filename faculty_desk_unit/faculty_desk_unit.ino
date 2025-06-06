@@ -2069,7 +2069,7 @@ void handleCancellationNotification(String messageContent) {
     }
     
     // Process next consultation in queue
-    processNextConsultationInQueue();
+    processNextQueuedConsultation();
     
   } else {
     // Check if the consultation is in the queue and remove it

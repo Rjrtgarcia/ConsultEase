@@ -1179,16 +1179,33 @@ class ConsultationPanel(QTabWidget):
             if current_student_id and student_id == current_student_id:
                 logger.info(f"📱 Processing consultation update for current student {student_id}: {consultation_id} -> {new_status}")
                 
-                # Update the history panel immediately
-                self.refresh_consultation_history_realtime(consultation_id, new_status, trigger)
-                
-                # Show notification based on update type
-                self.show_consultation_update_notification(data)
+                # Use QTimer.singleShot to ensure UI updates happen on main thread
+                QTimer.singleShot(0, lambda: self._process_consultation_update_safe(consultation_id, new_status, trigger, data))
             else:
                 logger.debug(f"Ignoring consultation update for different student: {student_id} (current: {current_student_id})")
                 
         except Exception as e:
             logger.error(f"Error handling real-time consultation update: {str(e)}")
+
+    def _process_consultation_update_safe(self, consultation_id, new_status, trigger, data):
+        """
+        Process consultation update safely on the main thread.
+        
+        Args:
+            consultation_id (int): Consultation ID
+            new_status (str): New status
+            trigger (str): Update trigger
+            data (dict): Full update data
+        """
+        try:
+            # Update the history panel immediately
+            self.refresh_consultation_history_realtime(consultation_id, new_status, trigger)
+            
+            # Show notification based on update type
+            self.show_consultation_update_notification(data)
+            
+        except Exception as e:
+            logger.error(f"Error processing consultation update safely: {str(e)}")
 
     def handle_student_notification(self, topic, data):
         """
@@ -1201,6 +1218,20 @@ class ConsultationPanel(QTabWidget):
         try:
             logger.info(f"🔔 Received student notification: {data}")
             
+            # Use QTimer.singleShot to ensure UI updates happen on main thread
+            QTimer.singleShot(0, lambda: self._process_student_notification_safe(data))
+                
+        except Exception as e:
+            logger.error(f"Error handling student notification: {str(e)}")
+
+    def _process_student_notification_safe(self, data):
+        """
+        Process student notification safely on the main thread.
+        
+        Args:
+            data (dict): Notification data
+        """
+        try:
             notification_type = data.get('type')
             
             if notification_type == 'consultation_response':
@@ -1208,26 +1239,54 @@ class ConsultationPanel(QTabWidget):
                 faculty_name = data.get('faculty_name', 'Faculty')
                 response_type = data.get('response_type', 'responded')
                 course_code = data.get('course_code', '')
+                consultation_id = data.get('consultation_id')
+                new_status = data.get('new_status')
                 
                 # Show appropriate notification
                 if response_type in ['ACKNOWLEDGE', 'ACCEPTED']:
                     message = f"✅ {faculty_name} accepted your consultation request"
+                    notification_display_type = "success"
+                    # Switch to history tab to show the accepted consultation
+                    self.setCurrentIndex(1)  # History tab
                 elif response_type in ['BUSY', 'UNAVAILABLE']:
                     message = f"⏰ {faculty_name} is currently busy. Please try again later"
+                    notification_display_type = "warning"
                 elif response_type in ['REJECTED', 'DECLINED']:
                     message = f"❌ {faculty_name} declined your consultation request"
+                    notification_display_type = "warning"
+                    # Switch to history tab to show the declined consultation
+                    self.setCurrentIndex(1)  # History tab
                 elif response_type == 'COMPLETED':
                     message = f"✅ Consultation with {faculty_name} completed"
+                    notification_display_type = "success"
                 else:
                     message = f"📋 {faculty_name} responded to your consultation request"
+                    notification_display_type = "info"
                 
                 if course_code:
                     message += f" ({course_code})"
                 
-                self.show_notification(message, "consultation_response")
+                self.show_notification(message, notification_display_type)
+                
+                # Refresh consultation history to show updated status if we have the data
+                if consultation_id and new_status:
+                    self.refresh_consultation_history_realtime(consultation_id, new_status, 'faculty_response')
+            
+            elif notification_type == 'cancellation_confirmation':
+                # Handle cancellation confirmation
+                consultation_id = data.get('consultation_id')
+                self.show_notification("🚫 Consultation cancelled successfully", "info")
+                if consultation_id:
+                    self.refresh_consultation_history_realtime(consultation_id, 'cancelled', 'student_cancellation')
+                
+            elif notification_type == 'system_message':
+                # Handle general system messages
+                message = data.get('message', '')
+                severity = data.get('severity', 'info')
+                self.show_notification(message, severity)
                 
         except Exception as e:
-            logger.error(f"Error handling student notification: {str(e)}")
+            logger.error(f"Error processing student notification safely: {str(e)}")
 
     def refresh_consultation_history_realtime(self, consultation_id, new_status, trigger):
         """
