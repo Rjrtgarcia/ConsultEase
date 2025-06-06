@@ -1583,11 +1583,19 @@ class DashboardWindow(BaseWindow):
             from ..utils.mqtt_utils import subscribe_to_topic
             from ..utils.mqtt_topics import MQTTTopics
             
-            # Subscribe to faculty status updates
+            # Subscribe to faculty status updates from central system (processed updates)
             subscribe_to_topic("consultease/faculty/+/status_update", self.handle_realtime_status_update)
+            
+            # Subscribe to direct ESP32 faculty status updates (raw status from devices)
+            subscribe_to_topic("consultease/faculty/+/status", self.handle_realtime_status_update)
+            
+            # Subscribe to system notifications
             subscribe_to_topic(MQTTTopics.SYSTEM_NOTIFICATIONS, self.handle_system_notification)
             
-            logger.info("Real-time faculty status updates enabled")
+            logger.info("✅ Real-time faculty status updates enabled (both processed and direct)")
+            logger.info("   📡 Subscribed to: consultease/faculty/+/status_update")
+            logger.info("   📡 Subscribed to: consultease/faculty/+/status")
+            logger.info("   📡 Subscribed to: consultease/system/notifications")
         except Exception as e:
             logger.error(f"Failed to set up real-time updates: {e}")
 
@@ -1612,13 +1620,46 @@ class DashboardWindow(BaseWindow):
             logger.info(f"[MQTT DASHBOARD HANDLER] handle_realtime_status_update - Topic: {topic}, Data: {data}")
             logger.debug(f"Received real-time faculty status update: {data}")
             
-            # Extract faculty ID and status
+            # Use QTimer.singleShot to ensure UI updates happen on main thread
+            QTimer.singleShot(0, lambda: self._process_status_update_safe(data))
+            
+        except Exception as e:
+            logger.error(f"Error handling real-time status update: {e}")
+
+    def _process_status_update_safe(self, data):
+        """
+        Process faculty status update safely on the main thread.
+        
+        Args:
+            data (dict): Status update data
+        """
+        try:
+            # Extract faculty ID and status with different formats
             faculty_id = data.get('faculty_id')
             new_status = data.get('status')
+            
+            # Handle direct ESP32 status format
+            if new_status is None and 'present' in data:
+                # ESP32 status format: {"faculty_id": 1, "present": true, "status": "AVAILABLE"}
+                new_status = data.get('present', False)
+            elif isinstance(new_status, str):
+                # Handle string status values from ESP32: "AVAILABLE", "AWAY", etc.
+                status_str = new_status.upper()
+                if status_str in ["AVAILABLE", "PRESENT"]:
+                    new_status = True
+                elif status_str in ["AWAY", "OFFLINE", "UNAVAILABLE"]:
+                    new_status = False
+                elif "BUSY" in status_str:
+                    new_status = "busy"  # Special case for busy status
+                else:
+                    logger.warning(f"Unknown status string: {new_status}")
+                    return
             
             if faculty_id is None or new_status is None:
                 logger.warning(f"Invalid faculty status update: {data}")
                 return
+                
+            logger.info(f"🔄 Processing dashboard status update: Faculty {faculty_id} -> {new_status}")
                 
             # Find and update the corresponding faculty card
             card_updated = self.update_faculty_card_status(faculty_id, new_status)
@@ -1627,12 +1668,11 @@ class DashboardWindow(BaseWindow):
             # trigger a full refresh to ensure data consistency across the dashboard.
             # This will re-fetch from DB, re-populate grid, and update consultation panel options.
             logger.debug(f"Realtime update for faculty {faculty_id} processed, card_updated: {card_updated}. Triggering full UI refresh.")
-            # Use QTimer.singleShot to schedule the refresh in the next event loop iteration.
-            # This can help coalesce multiple rapid updates and avoid immediate heavy refresh on every single MQTT message.
+            # Use signal to trigger UI refresh since we're now on the main thread
             self.request_ui_refresh.emit()
             
         except Exception as e:
-            logger.error(f"Error handling real-time status update: {e}")
+            logger.error(f"Error processing status update safely: {e}")
 
     def handle_system_notification(self, topic, data):
         """
@@ -1644,6 +1684,21 @@ class DashboardWindow(BaseWindow):
         """
         try:
             logger.info(f"[MQTT DASHBOARD HANDLER] handle_system_notification - Topic: {topic}, Data: {data}")
+            
+            # Use QTimer.singleShot to ensure UI updates happen on main thread
+            QTimer.singleShot(0, lambda: self._process_system_notification_safe(data))
+            
+        except Exception as e:
+            logger.error(f"Error handling system notification: {e}")
+
+    def _process_system_notification_safe(self, data):
+        """
+        Process system notification safely on the main thread.
+        
+        Args:
+            data (dict): Notification data
+        """
+        try:
             # Check if this is a faculty status notification
             if data.get('type') == 'faculty_status':
                 faculty_id = data.get('faculty_id')
@@ -1656,17 +1711,31 @@ class DashboardWindow(BaseWindow):
                     # Schedule a full refresh to ensure data consistency
                     self.request_ui_refresh.emit()
         except Exception as e:
-            logger.error(f"Error handling system notification: {e}")
+            logger.error(f"Error processing system notification safely: {e}")
 
-    def update_faculty_card_status(self, faculty_id, new_status_bool):
+    def update_faculty_card_status(self, faculty_id, new_status):
         """
         Update the status of a faculty card in real-time.
         
         Args:
             faculty_id (int): Faculty ID
-            new_status_bool (bool): New status (True = Available, False = Unavailable)
+            new_status (bool|str): New status (True = Available, False = Unavailable, "busy" = Busy)
         """
         try:
+            # Normalize status to string
+            if new_status is True:
+                status_string = "available"
+                available = True
+            elif new_status is False:
+                status_string = "offline"
+                available = False
+            elif new_status == "busy":
+                status_string = "busy"
+                available = False  # Busy is considered unavailable for consultation requests
+            else:
+                logger.warning(f"Unknown status type for faculty {faculty_id}: {new_status}")
+                return False
+            
             # Find the faculty card in the grid
             for i in range(self.faculty_grid.count()):
                 container_widget = self.faculty_grid.itemAt(i).widget()
@@ -1683,19 +1752,21 @@ class DashboardWindow(BaseWindow):
                     continue
                 
                 if faculty_card.faculty_data.get('id') == faculty_id:
-                    status_string = "available" if new_status_bool else "offline" # Or "unavailable"
-                    
                     # Update card's internal state and display using its own method
                     faculty_card.update_status(status_string)
                     
-                    # Update faculty_data dictionary stored in the card (if update_status doesn't do it)
-                    # PooledFacultyCard.update_status already updates self.faculty_data['status']
-                    # It also updates self.faculty_data['available'] effectively via the status string.
-                    faculty_card.faculty_data['available'] = new_status_bool
-
+                    # Update faculty_data dictionary stored in the card
+                    faculty_card.faculty_data['available'] = available
+                    faculty_card.faculty_data['status'] = status_string
 
                     # Update card's objectName for theming
-                    new_object_name = "faculty_card_available" if new_status_bool else "faculty_card_unavailable"
+                    if new_status is True:
+                        new_object_name = "faculty_card_available"
+                    elif new_status == "busy":
+                        new_object_name = "faculty_card_busy"
+                    else:
+                        new_object_name = "faculty_card_unavailable"
+                    
                     if faculty_card.objectName() != new_object_name:
                         faculty_card.setObjectName(new_object_name)
                         # Force style refresh
@@ -1703,7 +1774,7 @@ class DashboardWindow(BaseWindow):
                         faculty_card.style().polish(faculty_card)
                         faculty_card.update()
 
-                    logger.debug(f"Updated faculty card for ID {faculty_id} to status: {status_string} via card method")
+                    logger.debug(f"✅ Updated faculty card for ID {faculty_id} to status: {status_string}")
                     return True # Found and updated
             
             logger.debug(f"Faculty card for ID {faculty_id} not found in current view for status update.")
