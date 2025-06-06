@@ -114,6 +114,10 @@ class ConsultEaseApp:
         self.consultation_controller = ConsultationController()
         self.admin_controller = AdminController()
         self.faculty_response_controller = FacultyResponseController()
+        
+        # Set global faculty controller instance
+        from central_system.controllers.faculty_controller import set_faculty_controller
+        set_faculty_controller(self.faculty_controller)
 
         # Determine if it's a first-time setup scenario
         if self.admin_controller.is_first_time_setup():

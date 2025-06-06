@@ -1035,3 +1035,31 @@ class FacultyController:
         except Exception as e:
             logger.error(f"Error ensuring available faculty: {str(e)}")
             return None
+
+
+# Global faculty controller instance
+_faculty_controller_instance = None
+
+
+def get_faculty_controller():
+    """
+    Get the global faculty controller instance.
+    
+    Returns:
+        FacultyController: The global faculty controller instance
+    """
+    global _faculty_controller_instance
+    if _faculty_controller_instance is None:
+        _faculty_controller_instance = FacultyController()
+    return _faculty_controller_instance
+
+
+def set_faculty_controller(controller):
+    """
+    Set the global faculty controller instance.
+    
+    Args:
+        controller (FacultyController): The faculty controller instance to set
+    """
+    global _faculty_controller_instance
+    _faculty_controller_instance = controller

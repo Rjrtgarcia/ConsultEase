@@ -82,6 +82,7 @@
 #define MQTT_TOPIC_MESSAGES "consultease/faculty/" TOSTRING(FACULTY_ID) "/messages"
 #define MQTT_TOPIC_RESPONSES "consultease/faculty/" TOSTRING(FACULTY_ID) "/responses"
 #define MQTT_TOPIC_HEARTBEAT "consultease/faculty/" TOSTRING(FACULTY_ID) "/heartbeat"
+#define MQTT_TOPIC_CANCEL "consultease/faculty/" TOSTRING(FACULTY_ID) "/cancellations"
 
 // Legacy compatibility
 #define MQTT_LEGACY_STATUS "faculty/" TOSTRING(FACULTY_ID) "/status"

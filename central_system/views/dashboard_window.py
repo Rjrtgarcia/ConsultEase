@@ -1117,10 +1117,10 @@ class DashboardWindow(BaseWindow):
         """
         try:
             # Import faculty controller
-            from ..controllers import FacultyController
+            from ..controllers.faculty_controller import get_faculty_controller
 
-            # Get faculty controller
-            faculty_controller = FacultyController()
+            # Get the global faculty controller instance
+            faculty_controller = get_faculty_controller()
 
             # Get all faculty
             faculties = faculty_controller.get_all_faculty()
@@ -1261,8 +1261,8 @@ class DashboardWindow(BaseWindow):
 
         # Also populate the dropdown with all available faculty
         try:
-            from ..controllers import FacultyController # Local import
-            faculty_controller = FacultyController()
+            from ..controllers.faculty_controller import get_faculty_controller # Local import
+            faculty_controller = get_faculty_controller()
             available_faculty = faculty_controller.get_all_faculty(filter_available=True)
 
             # Set the faculty and faculty options in the consultation panel
@@ -1599,9 +1599,9 @@ class DashboardWindow(BaseWindow):
         Perform the initial load of faculty data.
         """
         try:
-            from ..controllers import FacultyController
+            from ..controllers.faculty_controller import get_faculty_controller
 
-            faculty_controller = FacultyController()
+            faculty_controller = get_faculty_controller()
             faculties = faculty_controller.get_all_faculty()
 
             # Convert to safe faculty data format
