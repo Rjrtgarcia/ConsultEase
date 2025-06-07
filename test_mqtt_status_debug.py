@@ -115,7 +115,7 @@ class MQTTStatusDebugger:
             db.close()
             return True
             
-        except Exception as e:
+    except Exception as e:
             logger.error(f"❌ Faculty Controller test failed: {e}")
             import traceback
             logger.error(traceback.format_exc())

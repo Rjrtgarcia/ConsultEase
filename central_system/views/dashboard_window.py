@@ -1743,22 +1743,18 @@ class DashboardWindow(BaseWindow):
             logger.info(f"[MQTT DASHBOARD HANDLER] handle_realtime_status_update - Topic: {topic}, Data: {data}")
             logger.debug(f"Received real-time faculty status update: {data}")
             
-            # 🔧 FIX: Use proper method reference instead of lambda to avoid closure issues
-            logger.info(f"🔄 [REALTIME] Scheduling immediate status update processing...")
+            # 🔧 CRITICAL FIX: Call processing function directly instead of using QTimer
+            # The MQTT handler is already called on the main thread, so no need for QTimer
+            logger.info(f"🔄 [REALTIME] Processing status update DIRECTLY...")
             
-            # Create a wrapper function to ensure proper data capture
-            def process_update_wrapper():
-                try:
-                    logger.info(f"🔄 [REALTIME] Executing status update wrapper for data: {data}")
-                    self._process_status_update_safe(data)
-                except Exception as wrapper_e:
-                    logger.error(f"❌ [REALTIME] Error in status update wrapper: {wrapper_e}")
-                    import traceback
-                    logger.error(f"❌ [REALTIME] Wrapper traceback: {traceback.format_exc()}")
-            
-            # Use QTimer.singleShot to ensure UI updates happen on main thread
-            QTimer.singleShot(0, process_update_wrapper)
-            logger.info(f"✅ [REALTIME] Status update scheduled for immediate execution")
+            try:
+                logger.info(f"🔄 [REALTIME] Calling _process_status_update_safe directly with data: {data}")
+                self._process_status_update_safe(data)
+                logger.info(f"✅ [REALTIME] Direct processing completed successfully")
+            except Exception as direct_e:
+                logger.error(f"❌ [REALTIME] Error in direct processing: {direct_e}")
+                import traceback
+                logger.error(f"❌ [REALTIME] Direct processing traceback: {traceback.format_exc()}")
             
         except Exception as e:
             logger.error(f"❌ [REALTIME] Error handling real-time status update: {e}")
@@ -1851,22 +1847,18 @@ class DashboardWindow(BaseWindow):
         try:
             logger.info(f"[MQTT DASHBOARD HANDLER] handle_system_notification - Topic: {topic}, Data: {data}")
             
-            # 🔧 FIX: Use proper method reference instead of lambda to avoid closure issues
-            logger.info(f"🔄 [SYSTEM_NOTIF] Scheduling system notification processing...")
+            # 🔧 CRITICAL FIX: Call processing function directly instead of using QTimer
+            # The MQTT handler is already called on the main thread, so no need for QTimer
+            logger.info(f"🔄 [SYSTEM_NOTIF] Processing system notification DIRECTLY...")
             
-            # Create a wrapper function to ensure proper data capture
-            def process_notification_wrapper():
-                try:
-                    logger.info(f"🔄 [SYSTEM_NOTIF] Executing system notification wrapper for data: {data}")
-                    self._process_system_notification_safe(data)
-                except Exception as wrapper_e:
-                    logger.error(f"❌ [SYSTEM_NOTIF] Error in notification wrapper: {wrapper_e}")
-                    import traceback
-                    logger.error(f"❌ [SYSTEM_NOTIF] Wrapper traceback: {traceback.format_exc()}")
-            
-            # Use QTimer.singleShot to ensure UI updates happen on main thread
-            QTimer.singleShot(0, process_notification_wrapper)
-            logger.info(f"✅ [SYSTEM_NOTIF] System notification scheduled for immediate execution")
+            try:
+                logger.info(f"🔄 [SYSTEM_NOTIF] Calling _process_system_notification_safe directly with data: {data}")
+                self._process_system_notification_safe(data)
+                logger.info(f"✅ [SYSTEM_NOTIF] Direct processing completed successfully")
+            except Exception as direct_e:
+                logger.error(f"❌ [SYSTEM_NOTIF] Error in direct processing: {direct_e}")
+                import traceback
+                logger.error(f"❌ [SYSTEM_NOTIF] Direct processing traceback: {traceback.format_exc()}")
             
         except Exception as e:
             logger.error(f"❌ [SYSTEM_NOTIF] Error handling system notification: {e}")
