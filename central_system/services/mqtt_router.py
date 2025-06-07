@@ -484,70 +484,10 @@ class MQTTRouter:
                 for route in self.routes.values()
             ]
 
-    def _handle_faculty_status_update(self, topic: str, payload: Any):
-        """Handle faculty status updates and update the database."""
-        try:
-            logger.debug(f"Handling faculty status update for topic {topic}: {payload}")
-            # Extract faculty_id from topic
-            match = re.search(r"consultease/faculty/(\d+)/status", topic)
-            if not match:
-                match = re.search(r"consultease/faculty/(\d+)/mac_status", topic) # Check mac_status topic as well
-            
-            if match:
-                faculty_id = int(match.group(1))
-                status_str = payload.get("status", "").upper()
-                # Detailed status can also be used if needed
-                # detailed_status_str = payload.get("detailed_status", "").upper()
-
-                availability = None
-                if status_str == "AVAILABLE" or status_str == "PRESENT":
-                    availability = "Available"
-                elif status_str == "AWAY" or status_str == "OFFLINE": # Consider AWAY and OFFLINE as Unavailable
-                    availability = "Unavailable"
-                elif "BUSY" in status_str: # If status contains BUSY
-                    availability = "Busy"
-                
-                if availability:
-                    from ..models.faculty import Faculty  # Delayed import
-                    from ..models.base import get_db # Delayed import
-
-                    with get_db() as db:
-                        faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
-                        if faculty:
-                            # Convert availability string to boolean status for database
-                            new_status = availability == "Available"
-                            logger.info(f"Updating faculty {faculty_id} status to {new_status} (from {availability})")
-                            faculty.status = new_status
-                            faculty.last_seen = datetime.now() # Update last_seen timestamp
-                            db.commit()
-                            logger.info(f"Faculty {faculty_id} status updated to {new_status} in database.")
-                            
-                            # Publish status update notification for real-time UI updates
-                            try:
-                                from ..utils.mqtt_utils import publish_mqtt_message
-                                notification = {
-                                    'type': 'faculty_status',
-                                    'faculty_id': faculty_id,
-                                    'faculty_name': faculty.name,
-                                    'status': new_status,
-                                    'availability': availability,
-                                    'timestamp': datetime.now().isoformat()
-                                }
-                                publish_mqtt_message(f"consultease/faculty/{faculty_id}/status_update", notification)
-                                publish_mqtt_message("consultease/system/notifications", notification)
-                                logger.debug(f"Published status update notifications for faculty {faculty_id}")
-                            except Exception as pub_e:
-                                logger.warning(f"Failed to publish status update notifications: {pub_e}")
-                        else:
-                            logger.warning(f"Faculty with ID {faculty_id} not found in database.")
-                else:
-                    logger.warning(f"Could not determine availability from status: {status_str} for faculty {faculty_id}")
-            else:
-                logger.warning(f"Could not extract faculty_id from topic: {topic}")
-        except Exception as e:
-            logger.error(f"Error handling faculty status update for topic {topic}: {e}")
-            # Optionally, update error stats for this specific handler
-            self._update_error_stats(topic) # Use existing method if appropriate
+    # REMOVED: _handle_faculty_status_update method
+    # This method was causing conflicts with Faculty Controller
+    # Faculty status updates are now handled exclusively by Faculty Controller
+    # to prevent race conditions and duplicate processing
 
 
 # Global router instance
