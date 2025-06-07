@@ -226,17 +226,8 @@ class DashboardWindow(BaseWindow):
             student: Student object containing user information
             parent: Parent widget (optional)
         """
-        # 🔧 FIX: Set student first, before calling super().__init__ which may call init_ui()
+        # 🔧 FIX: Initialize all members to None *before* calling super().__init__()
         self.student = student
-        
-        # 🔧 FIX: Call super().__init__ AFTER setting student
-        super().__init__(parent)
-
-        # Track last refresh time to prevent rapid refreshes that override real-time updates
-        self._last_refresh_time = 0
-        self._min_refresh_interval = 1.0  # Minimum 1 second between full refreshes (reduced for faster response)
-        
-        # Initialize UI component references
         self.faculty_card_manager = None
         self.consultation_panel = None
         self.faculty_grid = None
@@ -245,12 +236,15 @@ class DashboardWindow(BaseWindow):
         self.content_splitter = None
         self.inactivity_monitor = None
         self._is_loading = False
-
-        # Faculty data caching and change detection
         self._last_faculty_data_list = []
         self._last_faculty_hash = None
+        self._last_refresh_time = 0
+        self._min_refresh_interval = 1.0  # Minimum 1 second between full refreshes
+
+        # Call parent constructor, which will call init_ui()
+        super().__init__(parent)
         
-        # 🔧 REMOVED from here: super().__init__(parent)
+        # 🔧 REMOVED: All the self.xxx = None assignments from here.
 
         # Set up real-time updates for consultation status
         self.setup_real_time_updates()
