@@ -226,9 +226,12 @@ class DashboardWindow(BaseWindow):
             student: Student object containing user information
             parent: Parent widget (optional)
         """
-        # Set student first, before calling super().__init__ which may call init_ui()
+        # 🔧 FIX: Set student first, before calling super().__init__ which may call init_ui()
         self.student = student
         
+        # 🔧 FIX: Call super().__init__ AFTER setting student
+        super().__init__(parent)
+
         # Track last refresh time to prevent rapid refreshes that override real-time updates
         self._last_refresh_time = 0
         self._min_refresh_interval = 1.0  # Minimum 1 second between full refreshes (reduced for faster response)
@@ -247,8 +250,7 @@ class DashboardWindow(BaseWindow):
         self._last_faculty_data_list = []
         self._last_faculty_hash = None
         
-        # Call parent constructor (this may call init_ui)
-        super().__init__(parent)
+        # 🔧 REMOVED from here: super().__init__(parent)
 
         # Set up real-time updates for consultation status
         self.setup_real_time_updates()
@@ -273,6 +275,7 @@ class DashboardWindow(BaseWindow):
         Initialize the dashboard UI.
         """
         # Initialize faculty card manager for pooled cards
+        # 🔧 FIX: Ensure faculty card manager is initialized here
         from ..ui.pooled_faculty_card import get_faculty_card_manager
         self.faculty_card_manager = get_faculty_card_manager()
         
@@ -1292,6 +1295,7 @@ class DashboardWindow(BaseWindow):
 
         # Also populate the dropdown with all available faculty
         try:
+            # 🔧 FIX: Use get_faculty_controller()
             from ..controllers.faculty_controller import get_faculty_controller # Local import
             faculty_controller = get_faculty_controller()
             available_faculty = faculty_controller.get_all_faculty(filter_available=True)
@@ -1636,7 +1640,7 @@ class DashboardWindow(BaseWindow):
         # Real-time MQTT messages might arrive during dashboard initialization
         # Give them time to process and update the database before loading from DB
         from PyQt5.QtCore import QTimer
-        QTimer.singleShot(1000, self._perform_initial_faculty_load)  # 1 second delay
+        QTimer.singleShot(100, self._perform_initial_faculty_load)  # 100ms delay
 
     def _perform_initial_faculty_load(self):
         """
